@@ -1,0 +1,87 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>standby.flights source check</title>
+<style>
+/* One-tap test: which flight sources answer straight from this device's browser.
+   Each source is asked once per tap, so it barely touches anyone's daily limit. */
+:root { color-scheme: dark; --bg: #0c0c0e; --fg: #e9e4d6; --dim: #8f8a7c; --ok: #3dff8c; --bad: #ff6b4a; --accent: #ffb000; }
+* { box-sizing: border-box; }
+body { margin: 0; background: var(--bg); color: var(--fg); font: 17px/1.4 system-ui, sans-serif; padding: 16px; }
+h1 { font-size: 22px; margin: 0 0 6px; color: var(--accent); }
+p { color: var(--dim); margin: 0 0 14px; }
+button { font: 600 17px system-ui, sans-serif; background: var(--accent); color: #000; border: 0; border-radius: 6px; padding: 14px 18px; width: 100%; }
+ul { list-style: none; padding: 0; margin: 16px 0; }
+li { border: 1px solid #2a2a2e; border-radius: 6px; padding: 12px; margin-bottom: 10px; }
+.name { font-weight: 600; }
+.ok { color: var(--ok); } .bad { color: var(--bad); } .wait { color: var(--dim); }
+.note { font-size: 14px; color: var(--dim); word-break: break-word; }
+</style>
+</head>
+<body>
+<h1>Source check</h1>
+<p>Tests which flight data sources this device can reach directly. Run it on the tablet's own Wi-Fi. It asks each source once.</p>
+<button id="go">Run the check</button>
+<ul id="out"></ul>
+<p id="sum"></p>
+<script>
+(function () {
+  "use strict";
+  var LA = 37.1753, LO = -113.2899, R = 30;
+  var q = new URLSearchParams(location.search);
+  if (q.get("lat")) LA = parseFloat(q.get("lat"));
+  if (q.get("lon")) LO = parseFloat(q.get("lon"));
+  var box = [(LA - 0.5).toFixed(2), (LA + 0.5).toFixed(2), (LO - 0.6).toFixed(2), (LO + 0.6).toFixed(2)].join(",");
+  var TESTS = [
+    { name: "airplanes.live API", url: "https://api.airplanes.live/v2/point/" + LA + "/" + LO + "/" + R },
+    { name: "airplanes.live map feed", url: "https://globe.airplanes.live/re-api/?box=" + box },
+    { name: "adsb.lol API", url: "https://api.adsb.lol/v2/point/" + LA + "/" + LO + "/" + R },
+    { name: "adsb.fi open data", url: "https://opendata.adsb.fi/api/v2/lat/" + LA + "/lon/" + LO + "/dist/" + R },
+    { name: "OpenSky", url: "https://opensky-network.org/api/states/all?lamin=" + (LA - 0.5) + "&lomin=" + (LO - 0.6) + "&lamax=" + (LA + 0.5) + "&lomax=" + (LO + 0.6) },
+    { name: "adsbdb (aircraft details)", url: "https://api.adsbdb.com/v0/aircraft/A208C3" },
+    { name: "standby.flights relay", url: "/api/planes?lat=" + LA + "&lon=" + LO + "&r=" + R }
+  ];
+  var out = document.getElementById("out"), sum = document.getElementById("sum");
+  function count(j) {
+    if (j.response) return "details found";
+    var list = j.ac || j.aircraft || j.states || [];
+    return list.length + " aircraft";
+  }
+  function run(t) {
+    var li = document.createElement("li");
+    li.innerHTML = '<div class="name"></div><div class="wait">Checking...</div><div class="note"></div>';
+    li.firstChild.textContent = t.name;
+    out.appendChild(li);
+    var ctl = typeof AbortController !== "undefined" ? new AbortController() : null;
+    var timer = setTimeout(function () { if (ctl) ctl.abort(); }, 12000);
+    var started = Date.now();
+    return fetch(t.url, { cache: "no-store", signal: ctl ? ctl.signal : undefined })
+      .then(function (r) {
+        var ms = Date.now() - started;
+        if (!r.ok) throw new Error("HTTP " + r.status + " after " + ms + " ms");
+        return r.json().then(function (j) { return { ok: true, text: "Works: " + count(j) + ", " + ms + " ms" }; });
+      })
+      .catch(function (e) {
+        var msg = e.name === "TypeError" ? "Blocked by the browser (the source does not allow other sites)" : (e.name === "AbortError" ? "No answer in 12 seconds" : (e.message || String(e)));
+        return { ok: false, text: msg };
+      })
+      .then(function (res) {
+        clearTimeout(timer);
+        li.children[1].className = res.ok ? "ok" : "bad";
+        li.children[1].textContent = res.text;
+        li.children[2].textContent = t.url;
+        return { name: t.name, ok: res.ok, text: res.text };
+      });
+  }
+  document.getElementById("go").addEventListener("click", function () {
+    out.innerHTML = ""; sum.textContent = "";
+    Promise.all(TESTS.map(run)).then(function (rs) {
+      sum.textContent = "Summary to send back: " + rs.map(function (r) { return r.name + ": " + (r.ok ? "OK" : "no"); }).join("; ");
+    });
+  });
+})();
+</script>
+</body>
+</html>

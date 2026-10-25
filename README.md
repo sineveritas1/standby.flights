@@ -11,6 +11,7 @@ No framework, no build step, no dependencies.
 
 ```
 public/index.html          The whole app: HTML, CSS and JS in one file
+public/check.html          One-tap test of which sources a device can reach directly
 functions/_lib/relay.js    Shared server code: aircraft relay and route lookup (_lib is not routed)
 functions/api/planes.js    GET /api/planes?lat=&lon=&r=        nearby aircraft
 functions/api/route.js     GET /api/route?callsign=&lat=&lon=  origin and destination
