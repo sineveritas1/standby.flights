@@ -1,0 +1,3 @@
+# Optional. Point the site at a home relay (see docs/HOME_RELAY.md). Leave unset to fetch from Cloudflare.
+HOME_RELAY_URL=https://relay.example.com
+HOME_RELAY_KEY=replace-with-a-long-random-string

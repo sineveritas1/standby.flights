@@ -7,21 +7,24 @@ A retro flight-board display of planes overhead, for an old tablet. Personal pro
 
 ## Decisions made
 - Shape: one static page (`public/index.html`) plus two Pages Functions. No D1, KV or R2. The relay uses `caches.default` only.
+- The relay asks every source in parallel and merges by ICAO hex: freshest position wins, missing fields (type, owner, category, dbFlags) are filled from the others, TIS-B echoes are dropped. OpenSky is asked every 4 minutes at most (400 anonymous requests a day).
+- Optional home relay (`home/relay-server.mjs`, docs/HOME_RELAY.md): same code run on a home computer behind Cloudflare Tunnel. `/api/planes` asks it first when `HOME_RELAY_URL` and `HOME_RELAY_KEY` are set, then falls back to Cloudflare.
 - Name is `standby.flights`, written lowercase as a wordmark. Old names "Overhead" and "It's a Bird!" are retired; do not bring them back.
 - No real airline logos or trademarks. The Wall emblem is an original pixel plane on a color tile hashed from the airline code.
 - Fonts: Silkscreen, VT323, Barlow Condensed (Google Fonts). Skin palettes are set in `index.html`; treat them as brand.
-- Relay source order (tested from Cloudflare, Oct 2026): adsb.lol first, the only source that answers Cloudflare, and it sometimes returns 429. adsb.fi and airplanes.live return 403 to datacenter IPs; OpenSky times out. None of them send CORS headers that allow this site, so the browser cannot call them directly; the relay is the only path.
-- When every source fails, the relay serves the last good answer for up to 2 minutes, marked `cached`, with `seen_pos` aged so the page dead-reckons it forward.
+- From Cloudflare (Oct 2026) only adsb.lol answers, about half the time (429). adsb.fi and airplanes.live return 403, OpenSky times out (it says it may block cloud providers, so an OpenSky account will not fix it). None send CORS headers for this site, so the browser cannot call them directly.
+- Each source keeps a last good copy for 60 seconds, with `seen_pos` aged so the page dead-reckons it forward.
 - adsbdb route shape verified live. adsb.lol routeset could not be reached from the sandbox, so its shape is still unverified.
 - The page avoids optional chaining and `??` so it runs on old tablet browsers. Keep it that way.
 - Geocoding is OpenStreetMap Nominatim straight from the browser; fine at personal volume.
 
 ## Current step
-Live on standby-flights.pages.dev, deployed from `main`. Custom domain standby.flights not attached yet. Open question: getting a second source that answers Cloudflare (ask adsb.fi or airplanes.live for access, or a free OpenSky account).
+Live on standby-flights.pages.dev, deployed from `main`. Custom domain standby.flights added, waiting for the new domain to publish. Source access: emails drafted in docs/SOURCE_ACCESS.md, home relay built but not set up. Next: work through the screens one by one.
 
 ## Commands
 - Run locally: `npx wrangler pages dev` then open http://localhost:8788
 - Check the relay: `curl "http://localhost:8788/api/planes?lat=37.1753&lon=-113.2899&r=30"` and `curl "http://localhost:8788/api/route?callsign=SWA123"`
+- Home relay: `RELAY_KEY=... node home/relay-server.mjs` (port 8789)
 - Manual deploy (only if not using the Git connection): `npx wrangler pages deploy`
 
 ## Known gaps
