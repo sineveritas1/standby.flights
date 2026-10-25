@@ -1,0 +1,1090 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="theme-color" content="#000000">
+<title>standby.flights</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Silkscreen&family=VT323&family=Barlow+Condensed:wght@500;600;700&display=swap">
+<style>
+/* standby.flights: one full-screen instrument per skin. LED + VFD share a dot-matrix renderer,
+   RADAR is a vector phosphor scope, FLAP is a DOM split-flap board. Single dark world. */
+:root {
+  --ink: #000;
+  --ui-bg: rgba(14, 14, 16, 0.86);
+  --ui-line: rgba(255, 255, 255, 0.14);
+  --ui-fg: #e9e4d6;
+  --ui-dim: #8f8a7c;
+  --ui-accent: #ffb000;
+  --flap-bg: #0c0c0e;
+  --tile-top: #26262a;
+  --tile-bot: #1a1a1d;
+  --tile-fg: #f3efe3;
+  --flap-label: #f5c518;
+  --flap-hot: #ffcf3a;
+  --f-ui: "Barlow Condensed", "Arial Narrow", sans-serif;
+  --f-crt: "VT323", ui-monospace, monospace;
+  color-scheme: dark;
+}
+* { box-sizing: border-box; }
+[hidden] { display: none !important; }
+html, body { margin: 0; height: 100%; background: var(--ink); overflow: hidden; }
+body { font-family: var(--f-ui); color: var(--ui-fg); -webkit-user-select: none; user-select: none; -webkit-tap-highlight-color: transparent; }
+
+#stage { position: fixed; inset: 0; }
+#cv { position: absolute; inset: 0; width: 100%; height: 100%; display: block; }
+
+#scan {
+  position: absolute; inset: 0; pointer-events: none;
+  background:
+    repeating-linear-gradient(0deg, rgba(0,0,0,0.28) 0 1px, transparent 1px 3px),
+    radial-gradient(ellipse at center, transparent 55%, rgba(0,0,0,0.55) 100%);
+}
+
+/* ---------- split-flap board ---------- */
+#board {
+  position: absolute; inset: 0; background: var(--flap-bg);
+  padding: max(16px, env(safe-area-inset-top, 0px)) max(16px, env(safe-area-inset-right, 0px)) max(16px, env(safe-area-inset-bottom, 0px)) max(16px, env(safe-area-inset-left, 0px));
+  display: flex; flex-direction: column; gap: calc(var(--tile) * 0.35);
+}
+.b-title { display: flex; justify-content: space-between; align-items: baseline; gap: 16px;
+  color: var(--flap-label); font-weight: 700; text-transform: uppercase; letter-spacing: 0.08em;
+  font-size: calc(var(--tile) * 0.62); }
+.b-title .clock { color: var(--tile-fg); font-variant-numeric: tabular-nums; }
+.b-head, .b-row { display: flex; gap: calc(var(--tile) * 0.55); }
+.b-col { display: flex; gap: calc(var(--tile) * 0.08); }
+.b-head .b-col { color: var(--flap-label); font-size: calc(var(--tile) * 0.42); font-weight: 600; letter-spacing: 0.1em; }
+.tile {
+  position: relative; width: var(--tile); height: calc(var(--tile) * 1.38);
+  background: linear-gradient(var(--tile-top) 0 50%, var(--tile-bot) 50% 100%);
+  border-radius: calc(var(--tile) * 0.08);
+  box-shadow: inset 0 -1px 0 rgba(255,255,255,0.04), 0 2px 3px rgba(0,0,0,0.6);
+  display: grid; place-items: center; overflow: hidden;
+  color: var(--tile-fg); font-weight: 600; font-size: calc(var(--tile) * 1.02); line-height: 1;
+}
+.tile::after { content: ""; position: absolute; left: 0; right: 0; top: 50%; height: max(1px, calc(var(--tile) * 0.04)); background: #000; }
+.tile span { display: block; transform-origin: 50% 50%; }
+.tile.flip span { animation: flip 70ms linear; }
+@keyframes flip { 0% { transform: scaleY(1); } 50% { transform: scaleY(0.15); filter: brightness(0.6); } 100% { transform: scaleY(1); } }
+.b-row.hot .tile { color: var(--flap-hot); }
+.b-foot { margin-top: auto; color: var(--ui-dim); font-size: calc(var(--tile) * 0.4); letter-spacing: 0.08em; text-transform: uppercase; }
+
+/* ---------- controls ---------- */
+#ui {
+  position: fixed; top: max(12px, env(safe-area-inset-top, 0px)); right: max(12px, env(safe-area-inset-right, 0px));
+  display: flex; gap: 6px; flex-wrap: wrap; justify-content: flex-end;
+  transition: opacity 0.4s; z-index: 5;
+}
+#ui.idle { opacity: 0; pointer-events: none; }
+button {
+  font: 600 15px/1 var(--f-ui); letter-spacing: 0.1em; text-transform: uppercase;
+  color: var(--ui-fg); background: var(--ui-bg); border: 1px solid var(--ui-line);
+  padding: 10px 14px; border-radius: 4px; cursor: pointer;
+}
+button[aria-pressed="true"] { color: #000; background: var(--ui-accent); border-color: var(--ui-accent); }
+button:focus-visible, input:focus-visible { outline: 2px solid var(--ui-accent); outline-offset: 2px; }
+
+#settings {
+  position: fixed; inset: 0; z-index: 10; background: rgba(0,0,0,0.7);
+  display: grid; place-items: center; padding: 16px;
+}
+.panel {
+  width: min(460px, 100%); max-height: 100%; overflow: auto;
+  background: #141416; border: 1px solid var(--ui-line); border-radius: 6px; padding: 20px;
+  display: flex; flex-direction: column; gap: 14px;
+}
+.panel h2 { margin: 0; font-size: 24px; letter-spacing: 0.06em; text-transform: uppercase; color: var(--ui-accent); }
+.panel p { margin: 0; color: var(--ui-dim); font-size: 16px; line-height: 1.35; }
+.grid2 { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
+label { display: flex; flex-direction: column; gap: 4px; font-size: 14px; letter-spacing: 0.1em; text-transform: uppercase; color: var(--ui-dim); min-width: 0; }
+input {
+  font: 500 18px var(--f-ui); color: var(--ui-fg); background: #0b0b0c;
+  border: 1px solid var(--ui-line); border-radius: 4px; padding: 9px 10px; width: 100%;
+  -webkit-user-select: text; user-select: text;
+}
+.row { display: flex; gap: 8px; flex-wrap: wrap; }
+.row button.primary { background: var(--ui-accent); color: #000; border-color: var(--ui-accent); }
+#kiosk { font-size: 14px; word-break: break-all; color: var(--ui-fg); background: #0b0b0c; padding: 8px 10px; border-radius: 4px; border: 1px solid var(--ui-line); -webkit-user-select: text; user-select: text; }
+#msg { min-height: 1.2em; color: var(--ui-accent); font-size: 15px; }
+
+@media (prefers-reduced-motion: reduce) { .tile.flip span { animation: none; } }
+</style>
+</head>
+<body>
+<div id="stage">
+  <canvas id="cv"></canvas>
+  <div id="scan" hidden></div>
+  <div id="board" hidden></div>
+</div>
+
+<div id="ui">
+  <button data-skin="led" aria-pressed="false">LED</button>
+  <button data-skin="vfd" aria-pressed="false">VFD</button>
+  <button data-skin="radar" aria-pressed="false">Radar</button>
+  <button data-skin="flap" aria-pressed="false">Board</button>
+  <button data-skin="wall" aria-pressed="false">Wall</button>
+  <button id="btnFull">Full</button>
+  <button id="btnSet">Setup</button>
+</div>
+
+<div id="settings" hidden>
+  <div class="panel" role="dialog" aria-labelledby="setTitle">
+    <h2 id="setTitle">Your sky</h2>
+    <p>Pick the spot to watch. Type a street address, a city, a ZIP code, or coordinates like 37.1753, -113.2899.</p>
+    <label for="fWhere">Address, city, ZIP, or lat, lon<input id="fWhere" placeholder="123 Main St, Hurricane UT" autocomplete="street-address"></label>
+    <div class="row">
+      <button id="btnFind" class="primary">Find it</button>
+      <button id="btnGeo">Use this device's location</button>
+    </div>
+    <label for="fName">Name on screen<input id="fName" maxlength="24"></label>
+    <div class="grid2">
+      <label for="fLat">Latitude<input id="fLat" inputmode="decimal"></label>
+      <label for="fLon">Longitude<input id="fLon" inputmode="decimal"></label>
+      <label for="fRad">Radius (NM)<input id="fRad" inputmode="numeric"></label>
+      <label for="fElev">Ground elev (FT)<input id="fElev" inputmode="numeric"></label>
+      <label for="fPoll">Refresh (sec)<input id="fPoll" inputmode="numeric"></label>
+    </div>
+    <label>Kiosk link (opens straight to this setup)<div id="kiosk"></div></label>
+    <div id="msg" aria-live="polite"></div>
+    <div class="row">
+      <button id="btnSave" class="primary">Save</button>
+      <button id="btnCopy">Copy link</button>
+      <button id="btnClose">Close</button>
+    </div>
+  </div>
+</div>
+
+<script>
+(() => {
+"use strict";
+
+/* ================= config ================= */
+const DEFAULTS = { name: "HURRICANE UT", lat: 37.1753, lon: -113.2899, radius: 30, elev: 3250, poll: 8, skin: "led" };
+const SKINS = ["led", "vfd", "radar", "flap", "wall"];
+
+function loadCfg() {
+  let c = Object.assign({}, DEFAULTS);
+  try { const s = JSON.parse(localStorage.getItem("standby.cfg") || "null"); if (s) Object.assign(c, s); } catch (e) {}
+  const q = new URLSearchParams(location.search);
+  if (q.get("lat")) c.lat = parseFloat(q.get("lat"));
+  if (q.get("lon")) c.lon = parseFloat(q.get("lon"));
+  if (q.get("r")) c.radius = parseFloat(q.get("r"));
+  if (q.get("elev")) c.elev = parseFloat(q.get("elev"));
+  if (q.get("poll")) c.poll = parseFloat(q.get("poll"));
+  if (q.get("name")) c.name = q.get("name");
+  if (q.get("skin") && SKINS.includes(q.get("skin"))) c.skin = q.get("skin");
+  return sanitize(c);
+}
+function sanitize(c) {
+  c.lat = isFinite(c.lat) ? Math.max(-89, Math.min(89, c.lat)) : DEFAULTS.lat;
+  c.lon = isFinite(c.lon) ? Math.max(-180, Math.min(180, c.lon)) : DEFAULTS.lon;
+  c.radius = isFinite(c.radius) ? Math.max(2, Math.min(250, Math.round(c.radius))) : DEFAULTS.radius;
+  c.elev = isFinite(c.elev) ? c.elev : DEFAULTS.elev;
+  c.poll = isFinite(c.poll) ? Math.max(5, Math.min(120, c.poll)) : DEFAULTS.poll;
+  c.name = String(c.name || DEFAULTS.name).toUpperCase().slice(0, 24);
+  if (!SKINS.includes(c.skin)) c.skin = "led";
+  return c;
+}
+function saveCfg() { try { localStorage.setItem("standby.cfg", JSON.stringify(cfg)); } catch (e) {} }
+let cfg = loadCfg();
+
+/* ================= reference tables ================= */
+const TYPES = {
+  B737:"737-700",B738:"737-800",B739:"737-900",B38M:"737 MAX 8",B39M:"737 MAX 9",B3XM:"737 MAX 10",
+  B752:"757-200",B753:"757-300",B763:"767-300",B764:"767-400",B772:"777-200",B77L:"777-200LR",B77W:"777-300ER",
+  B788:"787-8",B789:"787-9",B78X:"787-10",B744:"747-400",B748:"747-8",B712:"717",
+  A319:"A319",A320:"A320",A321:"A321",A20N:"A320NEO",A21N:"A321NEO",A332:"A330-200",A333:"A330-300",
+  A339:"A330-900",A359:"A350-900",A35K:"A350-1000",A388:"A380",BCS1:"A220-100",BCS3:"A220-300",
+  E170:"E170",E75L:"E175",E75S:"E175",E190:"E190",E145:"ERJ-145",CRJ2:"CRJ-200",CRJ7:"CRJ-700",CRJ9:"CRJ-900",
+  DH8D:"DASH 8-400",AT76:"ATR 72",MD11:"MD-11",
+  C172:"CESSNA 172",C182:"CESSNA 182",C206:"CESSNA 206",C208:"CARAVAN",C210:"CESSNA 210",PC12:"PILATUS PC-12",
+  SR22:"CIRRUS SR22",SR20:"CIRRUS SR20",SF50:"CIRRUS JET",P28A:"PIPER WARRIOR",PA46:"PIPER MALIBU",DA40:"DIAMOND DA40",
+  BE20:"KING AIR 200",BE9L:"KING AIR 90",B350:"KING AIR 350",BE36:"BONANZA",TBM9:"TBM 900",TBM7:"TBM 700",
+  C25A:"CITATION CJ2",C25B:"CITATION CJ3",C525:"CITATIONJET",C560:"CITATION V",C56X:"CITATION XLS",C68A:"CITATION LAT",
+  C700:"CITATION LONG",E55P:"PHENOM 300",E50P:"PHENOM 100",CL30:"CHALLENGER 300",CL35:"CHALLENGER 350",CL60:"CHALLENGER 600",
+  GLF4:"GULFSTREAM IV",GLF5:"GULFSTREAM V",GLF6:"GULFSTREAM 650",GLEX:"GLOBAL EXPRESS",LJ45:"LEARJET 45",PC24:"PILATUS PC-24",
+  EC35:"H135 HELI",EC30:"H130 HELI",AS50:"A-STAR HELI",B407:"BELL 407",B06:"JETRANGER",R44:"ROBINSON R44",H60:"BLACK HAWK",
+  C130:"HERCULES",C30J:"C-130J",C17:"C-17",KC46:"KC-46",K35R:"KC-135",F16:"F-16",F18S:"F/A-18",F35:"F-35",T38:"T-38"
+};
+const AIRLINES = {
+  SWA:"SOUTHWEST",DAL:"DELTA",UAL:"UNITED",AAL:"AMERICAN",SKW:"SKYWEST",ASA:"ALASKA",JBU:"JETBLUE",FFT:"FRONTIER",
+  NKS:"SPIRIT",AAY:"ALLEGIANT",FDX:"FEDEX",UPS:"UPS",ENY:"ENVOY",RPA:"REPUBLIC",HAL:"HAWAIIAN",WJA:"WESTJET",
+  ACA:"AIR CANADA",AMX:"AEROMEXICO",VOI:"VOLARIS",BAW:"BRITISH",KLM:"KLM",DLH:"LUFTHANSA",QXE:"HORIZON",GTI:"ATLAS",
+  CPZ:"COMPASS",SCX:"SUN COUNTRY",MXY:"BREEZE",EJA:"NETJETS",LXJ:"FLEXJET",ABX:"ABX AIR",ATN:"ATI",VXP:"AVELO",
+  AFR:"AIR FRANCE",JAL:"JAPAN AIR",ANA:"ALL NIPPON",KAL:"KOREAN AIR",CPA:"CATHAY",QFA:"QANTAS",VIR:"VIRGIN ATL"
+};
+const DIRS = ["N","NNE","NE","ENE","E","ESE","SE","SSE","S","SSW","SW","WSW","W","WNW","NW","NNW"];
+const dirName = b => DIRS[Math.round(((b % 360) + 360) % 360 / 22.5) % 16];
+const airlineOf = c => (c && /^[A-Z]{3}\d/.test(c)) ? (AIRLINES[c.slice(0, 3)] || "") : "";
+const typeName = t => t ? (TYPES[t] || t) : "UNKNOWN TYPE";
+
+/* ================= data ================= */
+const PROVIDERS = [
+  { name: "ADSB.LOL",       url: (la, lo, r) => `https://api.adsb.lol/v2/point/${la}/${lo}/${r}` },
+  { name: "AIRPLANES.LIVE", url: (la, lo, r) => `https://api.airplanes.live/v2/point/${la}/${lo}/${r}` },
+  { name: "ADSB.FI",        url: (la, lo, r) => `https://opendata.adsb.fi/api/v2/lat/${la}/lon/${lo}/dist/${r}` }
+];
+let provIdx = 0;
+const S = { planes: [], source: "CONNECTING", demo: false, lastOk: 0, fails: 0 };
+let pollTimer = null;
+
+function parse(json, t) {
+  const list = json.ac || json.aircraft || [];
+  const out = [];
+  for (const a of list) {
+    if (typeof a.lat !== "number" || typeof a.lon !== "number") continue;
+    const ground = a.alt_baro === "ground";
+    const alt = ground ? 0 : (typeof a.alt_baro === "number" ? a.alt_baro : (typeof a.alt_geom === "number" ? a.alt_geom : null));
+    out.push({
+      hex: (a.hex || "").replace("~", "").toUpperCase(),
+      call: (a.flight || "").trim().toUpperCase(),
+      reg: (a.r || "").toUpperCase(),
+      type: (a.t || "").toUpperCase(),
+      alt, ground,
+      gs: typeof a.gs === "number" ? a.gs : 0,
+      trk: typeof a.track === "number" ? a.track : (typeof a.true_heading === "number" ? a.true_heading : null),
+      vr: typeof a.baro_rate === "number" ? a.baro_rate : (typeof a.geom_rate === "number" ? a.geom_rate : 0),
+      lat: a.lat, lon: a.lon,
+      seen: typeof a.seen_pos === "number" ? a.seen_pos : (a.seen || 0),
+      desc: (a.desc || "").toUpperCase(), ownOp: (a.ownOp || "").toUpperCase(),
+      t
+    });
+  }
+  return out;
+}
+
+async function fetchJSON(url, ms) {
+  const ctl = typeof AbortController !== "undefined" ? new AbortController() : null;
+  const timer = ctl ? setTimeout(() => ctl.abort(), ms) : null;
+  try {
+    const r = await fetch(url, { signal: ctl ? ctl.signal : undefined, cache: "no-store" });
+    if (!r.ok) throw new Error("HTTP " + r.status);
+    return await r.json();
+  } finally { if (timer) clearTimeout(timer); }
+}
+
+/* Same-site relay (Pages Functions in /functions/api). Tried first because it avoids browser cross-site blocks. */
+let relayOk = /^https?:$/.test(location.protocol);
+async function tryRelay(la, lo) {
+  const r = await fetch(`${location.pathname.replace(/[^/]*$/, "")}api/planes?lat=${la}&lon=${lo}&r=${cfg.radius}`, { cache: "no-store" });
+  if (r.status === 404) { relayOk = false; throw new Error("no relay on this host"); }
+  if (!r.ok) throw new Error("HTTP " + r.status);
+  const j = await r.json();
+  if (j.error) throw new Error(j.error);
+  return j;
+}
+
+async function poll() {
+  clearTimeout(pollTimer);
+  const la = cfg.lat.toFixed(4), lo = cfg.lon.toFixed(4);
+  let ok = false;
+  const errs = [];
+  if (relayOk) {
+    try {
+      const j = await tryRelay(la, lo);
+      S.planes = parse(j, Date.now());
+      S.source = (j.source || "RELAY").toUpperCase(); S.lastOk = Date.now(); S.fails = 0;
+      if (S.demo) stopDemo();
+      ok = true;
+    } catch (e) { errs.push("RELAY: " + (e.message || e)); }
+  }
+  for (let k = 0; k < PROVIDERS.length && !ok; k++) {
+    const p = PROVIDERS[(provIdx + k) % PROVIDERS.length];
+    try {
+      const j = await fetchJSON(p.url(la, lo, cfg.radius), 8000);
+      S.planes = parse(j, Date.now());
+      S.source = p.name; S.lastOk = Date.now(); S.fails = 0;
+      provIdx = (provIdx + k) % PROVIDERS.length;
+      if (S.demo) stopDemo();
+      ok = true;
+    } catch (e) { errs.push(p.name + ": " + (e.name === "TypeError" ? "blocked by browser" : (e.message || e))); }
+  }
+  S.errs = ok ? [] : errs;
+  if (!ok) {
+    S.fails++;
+    if (!S.lastOk || Date.now() - S.lastOk > 60000) startDemo();
+  }
+  const wait = ok ? cfg.poll * 1000 : Math.max(cfg.poll * 1000, 20000);
+  pollTimer = setTimeout(poll, document.hidden ? 60000 : wait);
+}
+
+/* ---------- demo traffic, used only when no network source answers ---------- */
+let demoTimer = null;
+const DEMO_POOL = [
+  ["SWA2381","B38M",37000],["DAL1442","A321",35000],["UAL617","B739",39000],["SKW3304","E75L",31000],
+  ["AAL2210","A21N",36000],["ASA1290","B39M",38000],["FDX1802","B763",33000],["N172SP","C172",6500],
+  ["JBU771","A320",34000],["N455PC","PC12",14500],["FFT2063","A20N",36000],["EJA588","C68A",41000]
+];
+const DEMO_ROUTES = [
+  { route: "LAS-DEN", from: "Harry Reid International Airport", to: "Denver International Airport" },
+  { route: "LAX-SLC", from: "Los Angeles International Airport", to: "Salt Lake City International Airport" },
+  { route: "SFO-ORD", from: "San Francisco International Airport", to: "Chicago O'Hare International Airport" },
+  { route: "SLC-PHX", from: "Salt Lake City International Airport", to: "Phoenix Sky Harbor International Airport" },
+  { route: "SAN-DEN", from: "San Diego International Airport", to: "Denver International Airport" },
+  { route: "SEA-PHX", from: "Seattle-Tacoma International Airport", to: "Phoenix Sky Harbor International Airport" },
+  { route: "LAS-MSP", from: "Harry Reid International Airport", to: "Minneapolis-St Paul International Airport" }
+];
+function nmToDeg(dxE, dyN) { return { dLat: dyN / 60, dLon: dxE / (60 * Math.cos(cfg.lat * Math.PI / 180)) }; }
+function spawnDemo(i, aimHome) {
+  const [call, type, alt] = DEMO_POOL[i % DEMO_POOL.length];
+  const r = cfg.radius * (aimHome ? 0.95 : (0.2 + Math.random() * 0.75));
+  const ang = Math.random() * Math.PI * 2;
+  const d = nmToDeg(Math.sin(ang) * r, Math.cos(ang) * r);
+  const homeBrg = (Math.atan2(-Math.sin(ang), -Math.cos(ang)) * 180 / Math.PI + 360) % 360;
+  const trk = aimHome ? homeBrg + (Math.random() * 6 - 3) : Math.random() * 360;
+  const slow = alt < 20000;
+  return { hex: "DEMO" + i, call, reg: call.startsWith("N") ? call : "", type, alt: alt + Math.round(Math.random() * 4) * 100,
+    ground: false, gs: slow ? 110 + Math.random() * 120 : 420 + Math.random() * 80, trk, vr: 0,
+    lat: cfg.lat + d.dLat, lon: cfg.lon + d.dLon, seen: 0, t: Date.now(), demo: true, idx: i,
+    demoRoute: call.startsWith("N") ? null : DEMO_ROUTES[i % DEMO_ROUTES.length] };
+}
+function startDemo() {
+  S.source = "DEMO TRAFFIC";
+  if (S.demo) return;
+  S.demo = true;
+  S.planes = [];
+  for (let i = 0; i < 8; i++) S.planes.push(spawnDemo(i, i === 0));
+  demoTimer = setInterval(() => {
+    const now = Date.now();
+    S.planes = S.planes.map(p => {
+      const q = project(p, now);
+      if (q.dist > cfg.radius) return spawnDemo(p.idx + 8, Math.random() < 0.35);
+      return Object.assign({}, p, { lat: q.plat, lon: q.plon, t: now });
+    });
+  }, 1000);
+}
+function stopDemo() { S.demo = false; clearInterval(demoTimer); demoTimer = null; }
+
+/* ---------- geometry ---------- */
+function project(p, now) {
+  const age = Math.min(60, (now - p.t) / 1000 + (p.seen || 0));
+  let lat = p.lat, lon = p.lon;
+  if (!p.ground && p.gs > 0 && p.trk != null) {
+    const d = p.gs * age / 3600, tr = p.trk * Math.PI / 180;
+    lat += d * Math.cos(tr) / 60;
+    lon += d * Math.sin(tr) / (60 * Math.cos(lat * Math.PI / 180));
+  }
+  const dy = (lat - cfg.lat) * 60;
+  const dx = (lon - cfg.lon) * 60 * Math.cos(cfg.lat * Math.PI / 180);
+  const dist = Math.hypot(dx, dy);
+  const brg = (Math.atan2(dx, dy) * 180 / Math.PI + 360) % 360;
+  const agl = p.alt == null ? null : Math.max(0, p.alt - cfg.elev);
+  const look = agl == null ? null : Math.atan2(agl, Math.max(dist, 0.01) * 6076) * 180 / Math.PI;
+  return Object.assign({}, p, { plat: lat, plon: lon, dx, dy, dist, brg, look });
+}
+function view(now) {
+  return S.planes.map(p => project(p, now)).filter(p => p.dist <= cfg.radius * 1.02).sort((a, b) => a.dist - b.dist);
+}
+const label = p => p.call || p.reg || p.hex;
+const fmtAlt = p => p.ground ? "GND" : (p.alt == null ? "----" : (Math.round(p.alt / 100) * 100).toLocaleString("en-US"));
+const fmtFL = p => p.ground ? "GND" : (p.alt == null ? "---" : (p.alt >= 18000 ? "FL" + Math.round(p.alt / 100) : String(Math.round(p.alt / 100) * 100)));
+const fmtDist = d => d < 10 ? d.toFixed(1) : String(Math.round(d));
+function status(p) {
+  if (p.ground) return "GROUND";
+  if (p.dist < 2) return "OVERHEAD";
+  if (p.vr > 500) return "CLIMBING";
+  if (p.vr < -500) return "DESCEND";
+  if (p.alt != null && p.alt >= 18000) return "CRUISE";
+  return "LOCAL";
+}
+function clock() { const d = new Date(); return String(d.getHours()).padStart(2, "0") + ":" + String(d.getMinutes()).padStart(2, "0"); }
+function sourceLine(n) { return `${n} AIRCRAFT  ${cfg.radius}NM  ${S.source}`; }
+
+/* ================= canvas ================= */
+const cv = document.getElementById("cv");
+const ctx = cv.getContext("2d");
+let dpr = 1;
+function sizeCanvas() {
+  dpr = Math.min(window.devicePixelRatio || 1, 2);
+  cv.width = Math.round(innerWidth * dpr);
+  cv.height = Math.round(innerHeight * dpr);
+}
+
+/* ---------- dot matrix renderer (LED + VFD) ---------- */
+const PALETTES = {
+  led: { on: "#ffb000", dim: "#a85f00", alert: "#ff3b1f", hi: "#fff1c2", off: "#1d1306", shape: "round" },
+  vfd: { on: "#58ffe0", dim: "#1e9a87", alert: "#ff5cd6", hi: "#e6fffb", off: "#081a18", shape: "square" }
+};
+const DOT = { buf: document.createElement("canvas"), cols: 0, rows: 0, pitch: 0, ox: 0, oy: 0, sprites: [], rgb: [], off: null, key: "" };
+DOT.bctx = DOT.buf.getContext("2d", { willReadFrequently: true });
+
+function hexRgb(h) { const n = parseInt(h.slice(1), 16); return [(n >> 16) & 255, (n >> 8) & 255, n & 255]; }
+function makeSprite(color, p, shape, glow) {
+  const c = document.createElement("canvas"); c.width = c.height = p * 2;
+  const g = c.getContext("2d"); const m = p;
+  if (glow) {
+    const rg = g.createRadialGradient(m, m, 0, m, m, p * 0.95);
+    const [r, gg, b] = hexRgb(color);
+    rg.addColorStop(0, `rgba(${r},${gg},${b},0.35)`); rg.addColorStop(1, `rgba(${r},${gg},${b},0)`);
+    g.fillStyle = rg; g.fillRect(0, 0, p * 2, p * 2);
+  }
+  g.fillStyle = color;
+  if (shape === "round") { g.beginPath(); g.arc(m, m, p * 0.38, 0, Math.PI * 2); g.fill(); }
+  else { const s = p * 0.74; g.fillRect(m - s / 2, m - s / 2, s, s); }
+  if (glow && shape === "round") { g.fillStyle = "rgba(255,255,255,0.22)"; g.beginPath(); g.arc(m - p * 0.08, m - p * 0.1, p * 0.14, 0, Math.PI * 2); g.fill(); }
+  return c;
+}
+function setupDots(skin) {
+  const P = PALETTES[skin];
+  const W = cv.width, H = cv.height;
+  const pitch = Math.max(3, Math.floor(Math.min(W, H) / 104));
+  const key = skin + W + "x" + H;
+  if (DOT.key === key) return;
+  DOT.key = key; DOT.pitch = pitch;
+  DOT.cols = Math.floor(W / pitch); DOT.rows = Math.floor(H / pitch);
+  DOT.ox = Math.floor((W - DOT.cols * pitch) / 2); DOT.oy = Math.floor((H - DOT.rows * pitch) / 2);
+  DOT.buf.width = DOT.cols; DOT.buf.height = DOT.rows;
+  DOT.order = ["on", "dim", "alert", "hi"];
+  DOT.sprites = DOT.order.map(k => makeSprite(P[k], pitch, P.shape, true));
+  DOT.rgb = DOT.order.map(k => hexRgb(P[k]));
+  const off = document.createElement("canvas"); off.width = W; off.height = H;
+  const o = off.getContext("2d"); o.fillStyle = "#000"; o.fillRect(0, 0, W, H);
+  const os = makeSprite(P.off, pitch, P.shape, false);
+  for (let y = 0; y < DOT.rows; y++) for (let x = 0; x < DOT.cols; x++) o.drawImage(os, DOT.ox + x * pitch - pitch / 2, DOT.oy + y * pitch - pitch / 2);
+  DOT.off = off;
+}
+function dtext(s, x, y, color, scale, align) {
+  const b = DOT.bctx;
+  b.font = (8 * (scale || 1)) + "px Silkscreen, monospace";
+  b.fillStyle = color; b.textBaseline = "top";
+  let w = b.measureText(s).width;
+  if (align === "right") x -= w;
+  b.fillText(s, Math.round(x), Math.round(y));
+  return w;
+}
+function composeDots(skin, now, list) {
+  const P = PALETTES[skin], b = DOT.bctx, C = DOT.cols, R = DOT.rows;
+  b.clearRect(0, 0, C, R);
+  const wide = C >= R * 1.3;
+  const x0 = 3;
+  const blink = Math.floor(now / 500) % 2 === 0;
+  const top = list[0];
+  const over = top && top.dist < 2 && !top.ground;
+
+  // radar region
+  let rad;
+  if (wide) { const s = Math.max(30, Math.min(R - 34, C - 98)); rad = { x: C - s - 3, y: 12, s }; }
+  else { const s = Math.max(30, Math.min(C - 6, R - 88 - 26)); rad = { x: Math.floor((C - s) / 2), y: 88, s }; }
+  const textW = wide ? rad.x - 6 : C - 3;
+
+  // header
+  b.save(); b.beginPath(); b.rect(0, 0, C, 11); b.clip();
+  if (over) { if (blink) dtext("OVERHEAD NOW", x0, 2, P.alert); }
+  else dtext(cfg.name, x0, 2, P.on);
+  dtext(clock(), C - 3, 2, P.dim, 1, "right");
+  b.restore();
+
+  b.save(); b.beginPath(); b.rect(0, 11, textW + 3, 76); b.clip();
+  if (!top) {
+    dtext("CLEAR", x0, 13, P.on, 2);
+    dtext("NO TRAFFIC", x0, 33, P.dim);
+    dtext("WITHIN " + cfg.radius + " NM", x0, 42, P.dim);
+  } else {
+    dtext(label(top), x0, 12, over ? P.alert : P.on, 2);
+    const air = airlineOf(top.call);
+    const rows = [
+      [air || (top.reg && top.reg !== top.call ? top.reg : "TYPE"), typeName(top.type)],
+      ["ALT", top.ground ? "ON GROUND" : fmtAlt(top) + " FT"],
+      ["SPD", Math.round(top.gs) + " KT"],
+      ["DIST", fmtDist(top.dist) + " NM " + dirName(top.brg)],
+      ["LOOK", top.look == null ? "--" : Math.round(top.look) + " DEG UP"],
+      ["HDG", top.trk == null ? "--" : String(Math.round(top.trk)).padStart(3, "0") + " " + dirName(top.trk)]
+    ];
+    rows.forEach((r, i) => {
+      const y = 31 + i * 9;
+      if (i === 0) dtext(air ? air + " " + typeName(top.type) : r[1], x0, y, P.on);
+      else { dtext(r[0], x0, y, P.dim); dtext(r[1], x0 + 26, y, P.on); }
+    });
+  }
+  b.restore();
+
+  // radar scope in dots
+  const cx = rad.x + rad.s / 2, cy = rad.y + rad.s / 2, rr = rad.s / 2 - 1;
+  b.strokeStyle = P.dim; b.lineWidth = 1;
+  [1, 0.5].forEach(f => { b.beginPath(); b.arc(cx, cy, rr * f, 0, Math.PI * 2); b.stroke(); });
+  const sw = (now / 4000 % 1) * Math.PI * 2;
+  b.beginPath(); b.moveTo(cx, cy); b.lineTo(cx + Math.sin(sw) * rr, cy - Math.cos(sw) * rr); b.stroke();
+  dtext("N", cx - 2, rad.y - 9 < 11 ? rad.y + 1 : rad.y - 9, P.dim);
+  b.fillStyle = P.hi; b.fillRect(Math.round(cx) - 1, Math.round(cy), 3, 1); b.fillRect(Math.round(cx), Math.round(cy) - 1, 1, 3);
+  for (let i = list.length - 1; i >= 0; i--) {
+    const p = list[i];
+    const px = Math.round(cx + p.dx / cfg.radius * rr), py = Math.round(cy - p.dy / cfg.radius * rr);
+    if (p.trk != null) {
+      const tr = p.trk * Math.PI / 180;
+      b.fillStyle = P.dim;
+      b.fillRect(Math.round(px - Math.sin(tr) * 2), Math.round(py + Math.cos(tr) * 2), 1, 1);
+      b.fillRect(Math.round(px - Math.sin(tr) * 3), Math.round(py + Math.cos(tr) * 3), 1, 1);
+    }
+    if (i === 0) { b.fillStyle = (blink || !over) ? P.alert : P.on; b.fillRect(px - 1, py - 1, 2, 2); }
+    else { b.fillStyle = P.on; b.fillRect(px, py, 1, 1); }
+  }
+
+  // ticker of everyone else
+  const ty = R - 20;
+  const others = list.slice(1).map(p => `${label(p)} ${p.type || ""} ${fmtFL(p)} ${fmtDist(p.dist)}NM ${dirName(p.brg)}`);
+  const tick = others.length ? others.join("   +   ") + "   +   " : "WATCHING THE SKY OVER " + cfg.name + "   +   ";
+  b.font = "8px Silkscreen, monospace";
+  const tw = b.measureText(tick).width;
+  const off = (now / 1000 * 14) % tw;
+  b.save(); b.beginPath(); b.rect(0, ty, C, 9); b.clip();
+  for (let x = -off; x < C; x += tw) dtext(tick, x, ty, P.on);
+  b.restore();
+  b.fillStyle = P.dim; b.fillRect(0, ty - 2, C, 1);
+  dtext(sourceLine(list.length), x0, R - 10, P.dim);
+}
+function blitDots() {
+  const C = DOT.cols, R = DOT.rows, p = DOT.pitch, h = p / 2;
+  ctx.drawImage(DOT.off, 0, 0);
+  const d = DOT.bctx.getImageData(0, 0, C, R).data;
+  const rgb = DOT.rgb, sp = DOT.sprites;
+  for (let y = 0, i = 0; y < R; y++) {
+    for (let x = 0; x < C; x++, i += 4) {
+      if (d[i + 3] < 110) continue;
+      const r = d[i], g = d[i + 1], bl = d[i + 2];
+      let best = 0, bd = 1e9;
+      for (let k = 0; k < rgb.length; k++) {
+        const dr = r - rgb[k][0], dg = g - rgb[k][1], db = bl - rgb[k][2];
+        const dd = dr * dr + dg * dg + db * db;
+        if (dd < bd) { bd = dd; best = k; }
+      }
+      ctx.drawImage(sp[best], DOT.ox + x * p - h, DOT.oy + y * p - h);
+    }
+  }
+}
+
+/* ---------- routes (origin/destination are not in ADS-B; looked up by callsign) ---------- */
+const ROUTES = new Map();
+function fromAdsbdb(j, cs) {
+  const f = j && j.response && j.response.flightroute;
+  if (!f || !f.origin || !f.destination) return null;
+  const o = f.origin, d = f.destination;
+  return { callsign: cs, airline: (f.airline && f.airline.name) || "",
+    route: (o.iata_code || o.icao_code) + "-" + (d.iata_code || d.icao_code),
+    from: o.name || "", to: d.name || "", fromCity: o.municipality || "", toCity: d.municipality || "" };
+}
+async function fetchRoute(p) {
+  const q = `callsign=${encodeURIComponent(p.call)}&lat=${p.lat.toFixed(3)}&lon=${p.lon.toFixed(3)}`;
+  if (relayOk) {
+    try {
+      const r = await fetch(`${location.pathname.replace(/[^/]*$/, "")}api/route?${q}`, { cache: "no-store" });
+      if (r.ok) { const j = await r.json(); return j && j.route ? j : null; }
+    } catch (e) {}
+  }
+  try { return fromAdsbdb(await fetchJSON("https://api.adsbdb.com/v0/callsign/" + encodeURIComponent(p.call), 8000), p.call); }
+  catch (e) { return null; }
+}
+function routeFor(p) {
+  if (!p) return null;
+  if (p.demo) return p.demoRoute || null;
+  if (!p.call || !/^[A-Z]{3}\d/.test(p.call)) return null; // private flights rarely file public routes
+  let e = ROUTES.get(p.call);
+  const stale = e && !e.pending && Date.now() - e.t > (e.data ? 3600e3 : 900e3);
+  if (!e || stale) {
+    e = { t: Date.now(), data: e ? e.data : null, pending: true };
+    ROUTES.set(p.call, e);
+    fetchRoute(p).then(d => { e.data = d; }).catch(() => {}).finally(() => { e.pending = false; e.t = Date.now(); });
+  }
+  return e.data;
+}
+function shortAirport(n) {
+  return (n || "").toUpperCase().replace(/INTERNATIONAL/g, "INTL").replace(/\s+AIRPORT$/, "").replace(/ AIRPORT /, " ")
+    .replace(/REGIONAL/g, "RGNL").replace(/MUNICIPAL/g, "MUNI").replace(/\s+/g, " ").trim();
+}
+function maker(t, name) {
+  if (/^7\d7|^7\d\d-|^717/.test(name)) return "BOEING " + name;
+  if (/^A\d{3}/.test(name)) return "AIRBUS " + name;
+  if (/^E1|^E7|^ERJ/.test(name)) return "EMBRAER " + name;
+  if (/^CRJ/.test(name)) return "BOMBARDIER " + name;
+  return name;
+}
+
+/* ---------- WALL: full-color RGB LED panel ---------- */
+const WALL = { buf: document.createElement("canvas"), key: "" };
+WALL.b = WALL.buf.getContext("2d", { willReadFrequently: true });
+const WC = { airline: "#d6e4ff", route: "#7fb0ff", type: "#9a8cff", label: "#e9efff", value: "#55a2ff",
+  place: "#c9d6ff", dim: "#5d6f9e", hot: "#ff7a2f", warm: "#ffd166" };
+function setupWall() {
+  const W = cv.width, H = cv.height;
+  const key = W + "x" + H;
+  if (WALL.key === key) return;
+  WALL.key = key;
+  const pitch = Math.max(3, Math.floor(Math.min(W / 150, H / 66)));
+  WALL.pitch = pitch;
+  WALL.cols = Math.floor(W / pitch); WALL.rows = Math.floor(H / pitch);
+  WALL.ox = Math.floor((W - WALL.cols * pitch) / 2); WALL.oy = Math.floor((H - WALL.rows * pitch) / 2);
+  WALL.buf.width = WALL.cols; WALL.buf.height = WALL.rows;
+  // dim unlit dots underneath
+  const off = document.createElement("canvas"); off.width = W; off.height = H;
+  const o = off.getContext("2d"); o.fillStyle = "#000"; o.fillRect(0, 0, W, H); o.fillStyle = "#15161c";
+  // mask: black everywhere except round holes where each LED sits
+  const mask = document.createElement("canvas"); mask.width = W; mask.height = H;
+  const m = mask.getContext("2d"); m.fillStyle = "#000"; m.fillRect(0, 0, W, H); m.globalCompositeOperation = "destination-out";
+  const rad = pitch * 0.42;
+  for (let y = 0; y < WALL.rows; y++) {
+    const cy = WALL.oy + y * pitch + pitch / 2;
+    o.beginPath(); m.beginPath();
+    for (let x = 0; x < WALL.cols; x++) {
+      const cx = WALL.ox + x * pitch + pitch / 2;
+      o.moveTo(cx + rad, cy); o.arc(cx, cy, rad, 0, Math.PI * 2);
+      m.moveTo(cx + rad, cy); m.arc(cx, cy, rad, 0, Math.PI * 2);
+    }
+    o.fill(); m.fill();
+  }
+  WALL.off = off; WALL.mask = mask;
+}
+function wtext(s, x, y, color, maxW, align) {
+  const b = WALL.b;
+  b.font = "8px Silkscreen, monospace"; b.textBaseline = "top"; b.fillStyle = color;
+  s = String(s);
+  if (maxW) while (s.length > 1 && b.measureText(s).width > maxW) s = s.slice(0, -1);
+  const w = b.measureText(s).width;
+  b.fillText(s, Math.round(align === "right" ? x - w : align === "center" ? x - w / 2 : x), Math.round(y));
+  return w;
+}
+function hueOf(s) { let h = 0; for (const c of s) h = (h * 31 + c.charCodeAt(0)) % 360; return h; }
+function drawEmblem(x, y, T, p, code) {
+  const b = WALL.b;
+  const h = code ? hueOf(code) : 150;
+  const g = b.createLinearGradient(x, y, x + T, y + T);
+  g.addColorStop(0, `hsl(${h},85%,58%)`); g.addColorStop(1, `hsl(${(h + 40) % 360},80%,34%)`);
+  b.fillStyle = g; b.fillRect(x, y, T, T);
+  // original pixel plane, pointed the way it is actually flying
+  const s = T * 0.42, cx = x + T / 2, cy = y + T / 2;
+  const pts = [[0,-1],[0.11,-0.8],[0.11,-0.22],[0.95,0.18],[0.95,0.32],[0.11,0.14],[0.09,0.62],[0.36,0.82],[0.36,0.94],[0,0.86]];
+  const tr = ((p && p.trk != null) ? p.trk : 45) * Math.PI / 180;
+  b.save(); b.translate(cx, cy); b.rotate(tr); b.fillStyle = "#ffffff"; b.beginPath();
+  pts.forEach(([px, py], i) => i ? b.lineTo(px * s, py * s) : b.moveTo(px * s, py * s));
+  for (let i = pts.length - 1; i >= 0; i--) b.lineTo(-pts[i][0] * s, pts[i][1] * s);
+  b.closePath(); b.fill(); b.restore();
+}
+function statBits(p) {
+  const alt = p.ground ? "GND" : (p.alt == null ? "--" : (p.alt >= 1000 ? (p.alt / 1000).toFixed(1) + "KFT" : Math.round(p.alt) + "FT"));
+  const vr = Math.round(p.vr / 60);
+  return { alt, spd: Math.round(p.gs * 1.15078) + "MPH", trk: p.trk == null ? "--" : Math.round(p.trk) + "DEG", vr: (vr > 0 ? "+" : "") + vr + "FT/S" };
+}
+function wallFrame(now, list) {
+  setupWall();
+  const b = WALL.b, C = WALL.cols, R = WALL.rows;
+  b.clearRect(0, 0, C, R);
+  const top = list[0];
+  const over = top && top.dist < 2 && !top.ground;
+  const blink = Math.floor(now / 500) % 2 === 0;
+  const portrait = R > C * 0.9;
+  const LH = 10;
+
+  if (!top) {
+    wtext("CLEAR SKIES", C / 2, R / 2 - 14, WC.airline, 0, "center");
+    wtext("NO AIRCRAFT WITHIN " + cfg.radius + "NM", C / 2, R / 2 - 2, WC.dim, C - 4, "center");
+    wtext(clock(), C / 2, R / 2 + 10, WC.route, 0, "center");
+  } else {
+    const rt = routeFor(top);
+    const code = /^[A-Z]{3}\d/.test(top.call) ? top.call.slice(0, 3) : "";
+    const airline = ((rt && rt.airline) || airlineOf(top.call) || top.ownOp || "").toUpperCase();
+    const line1 = airline || label(top);
+    const line2 = rt ? rt.route.replace(/-/g, "-") : (airline ? label(top) : (top.reg && top.reg !== label(top) ? top.reg : "PRIVATE"));
+    const line3 = top.desc || (top.type ? maker(top.type, typeName(top.type)) : "UNKNOWN TYPE");
+    const from = rt ? shortAirport(rt.from) : "", to = rt ? shortAirport(rt.to) : "";
+    const st = statBits(top);
+    const where = fmtDist(top.dist) + "NM " + dirName(top.brg) + (top.look == null ? "" : "  " + Math.round(top.look) + "DEG UP");
+
+    if (!portrait) {
+      const T = LH * 3 - 2, x1 = T + 6;
+      const wide = C >= 200;
+      const textMax = wide ? C - x1 - 70 : C - x1 - 2;
+      drawEmblem(2, 2, T, top, code);
+      wtext(line1, x1, 2, WC.airline, textMax);
+      wtext(line2, x1, 2 + LH, WC.route, textMax);
+      wtext(line3, x1, 2 + LH * 2, WC.type, textMax);
+      let y = 2 + LH * 3 + 2;
+      if (wide) {
+        [["ALT:", st.alt], ["SPD:", st.spd], ["TRK:", st.trk], ["VR:", st.vr]].forEach(([l, v], i) => {
+          const vw = wtext(v, C - 2, 2 + i * LH, WC.value, 0, "right");
+          wtext(l, C - 4 - vw, 2 + i * LH, WC.label, 0, "right");
+        });
+      } else {
+        let x = 2;
+        x += wtext("ALT:", x, y, WC.label); x += wtext(st.alt, x, y, WC.value); x += wtext(",SPD:", x, y, WC.label); wtext(st.spd, x, y, WC.value, C - x - 2);
+        y += LH; x = 2;
+        x += wtext("TRK:", x, y, WC.label); x += wtext(st.trk, x, y, WC.value); x += wtext(",VR:", x, y, WC.label); wtext(st.vr, x, y, WC.value, C - x - 2);
+        y += LH;
+      }
+      if (from && y + LH * 2 <= R - 20) { wtext(from, 2, y, WC.place, C - 4); wtext(to, 2, y + LH, WC.place, C - 4); }
+    } else {
+      const T = Math.min(C - 4, 44);
+      drawEmblem(Math.floor((C - T) / 2), 2, T, top, code);
+      let y = T + 6;
+      const put = (s, c) => { if (y + LH <= R - 20) { wtext(s, 2, y, c, C - 4); y += LH; } };
+      put(line1, WC.airline); put(line2, WC.route); put(line3, WC.type);
+      if (from) { put(from, WC.place); put(to, WC.place); }
+      y += 3;
+      [["ALT ", st.alt], ["SPD ", st.spd], ["TRK ", st.trk], ["VR ", st.vr]].forEach(([l, v]) => {
+        if (y + LH <= R - 20) { const lw = wtext(l, 2, y, WC.label); wtext(v, 2 + lw, y, WC.value, C - lw - 4); y += LH; }
+      });
+      y += 4;
+      const others = list.slice(1);
+      if (others.length && y + LH * 2 <= R - 20) { wtext("ALSO NEARBY", 2, y, WC.dim); y += LH; }
+      for (const p of others) {
+        if (y + LH > R - 20) break;
+        wtext(label(p).padEnd(8), 2, y, WC.route, C * 0.5);
+        wtext(fmtFL(p) + " " + fmtDist(p.dist) + dirName(p.brg), C - 2, y, WC.value, C * 0.5, "right");
+        y += LH;
+      }
+    }
+    // status line
+    const sy = R - 19;
+    if (over) { if (blink) wtext("OVERHEAD NOW", 2, sy, WC.hot); }
+    else wtext(where, 2, sy, WC.warm, C - 40);
+    wtext(clock(), C - 2, sy, WC.dim, 0, "right");
+  }
+  // ticker
+  const ty = R - 9;
+  const others = list.slice(1).map(p => { const r = routeFor(p); return `${label(p)} ${r ? r.route : (p.type || "")} ${fmtFL(p)} ${fmtDist(p.dist)}NM ${dirName(p.brg)}`; });
+  const tick = (others.length ? others.join("  +  ") : sourceLine(list.length)) + "  +  ";
+  b.font = "8px Silkscreen, monospace";
+  const tw = b.measureText(tick).width;
+  const offx = (now / 1000 * 14) % tw;
+  b.save(); b.beginPath(); b.rect(0, ty, C, 9); b.clip();
+  for (let x = -offx; x < C; x += tw) wtext(tick, x, ty, WC.dim);
+  b.restore();
+
+  // snap to whole LEDs: each pixel is either lit or dark
+  const img = b.getImageData(0, 0, C, R), d = img.data;
+  for (let i = 3; i < d.length; i += 4) d[i] = d[i] > 100 ? 255 : 0;
+  b.putImageData(img, 0, 0);
+
+  const W = cv.width, H = cv.height;
+  ctx.drawImage(WALL.off, 0, 0);
+  ctx.imageSmoothingEnabled = false;
+  ctx.drawImage(WALL.buf, WALL.ox, WALL.oy, C * WALL.pitch, R * WALL.pitch);
+  ctx.drawImage(WALL.mask, 0, 0);
+  ctx.globalCompositeOperation = "lighter"; ctx.globalAlpha = 0.28; ctx.imageSmoothingEnabled = true;
+  ctx.drawImage(WALL.buf, WALL.ox, WALL.oy, C * WALL.pitch, R * WALL.pitch);
+  ctx.globalCompositeOperation = "source-over"; ctx.globalAlpha = 1;
+}
+
+/* ---------- radar scope ---------- */
+const RC = { bg: "#010c05", bright: "#3dff8c", mid: "#1f8a4c", dim: "#0f3f22", alert: "#ffd23f" };
+function radarFrame(now, list) {
+  const W = cv.width, H = cv.height, d = dpr;
+  ctx.fillStyle = RC.bg; ctx.fillRect(0, 0, W, H);
+  const wide = W > H * 1.15;
+  const listW = wide ? Math.min(W * 0.38, 560 * d) : 0;
+  const pad = 20 * d;
+  let R, cx, cy;
+  if (wide) { R = Math.min((W - listW) / 2 - pad, H / 2 - pad * 2.2); cx = (W - listW) / 2; cy = H / 2 + pad * 0.4; }
+  else { R = Math.min(W / 2 - pad, H * 0.3); cx = W / 2; cy = pad * 3.2 + R; }
+  const fs = Math.max(14 * d, Math.min(24 * d, R / 11));
+  ctx.font = `${fs}px VT323, monospace`; ctx.textBaseline = "middle";
+
+  // rings + ticks
+  ctx.strokeStyle = RC.dim; ctx.lineWidth = Math.max(1, d);
+  for (let i = 1; i <= 3; i++) { ctx.beginPath(); ctx.arc(cx, cy, R * i / 3, 0, Math.PI * 2); ctx.stroke(); }
+  ctx.beginPath(); ctx.moveTo(cx - R, cy); ctx.lineTo(cx + R, cy); ctx.moveTo(cx, cy - R); ctx.lineTo(cx, cy + R); ctx.stroke();
+  for (let a = 0; a < 360; a += 10) {
+    const t = a * Math.PI / 180, l = a % 30 === 0 ? 10 * d : 5 * d;
+    ctx.beginPath(); ctx.moveTo(cx + Math.sin(t) * R, cy - Math.cos(t) * R);
+    ctx.lineTo(cx + Math.sin(t) * (R + l), cy - Math.cos(t) * (R + l)); ctx.strokeStyle = RC.mid; ctx.stroke();
+  }
+  ctx.fillStyle = RC.mid; ctx.textAlign = "center";
+  [["N", 0], ["E", 90], ["S", 180], ["W", 270]].forEach(([s, a]) => {
+    const t = a * Math.PI / 180; ctx.fillText(s, cx + Math.sin(t) * (R + 22 * d), cy - Math.cos(t) * (R + 22 * d));
+  });
+  ctx.textAlign = "left";
+  for (let i = 1; i <= 3; i++) ctx.fillText(Math.round(cfg.radius * i / 3) + (i === 3 ? " NM" : ""), cx + 4 * d, cy - R * i / 3 + fs * 0.55);
+
+  // sweep with phosphor trail
+  const sw = (now / 4000 % 1) * Math.PI * 2;
+  const steps = 40, span = Math.PI / 2;
+  ctx.fillStyle = RC.bright;
+  for (let i = 0; i < steps; i++) {
+    const a1 = sw - span * i / steps, a0 = sw - span * (i + 1) / steps;
+    ctx.globalAlpha = 0.16 * (1 - i / steps);
+    ctx.beginPath(); ctx.moveTo(cx, cy); ctx.arc(cx, cy, R, a0 - Math.PI / 2, a1 - Math.PI / 2); ctx.closePath(); ctx.fill();
+  }
+  ctx.globalAlpha = 1; ctx.strokeStyle = RC.bright; ctx.lineWidth = 2 * d;
+  ctx.beginPath(); ctx.moveTo(cx, cy); ctx.lineTo(cx + Math.sin(sw) * R, cy - Math.cos(sw) * R); ctx.stroke();
+
+  // home
+  ctx.strokeStyle = RC.bright; ctx.lineWidth = 1.5 * d; const hs = 5 * d;
+  ctx.strokeRect(cx - hs, cy - hs, hs * 2, hs * 2);
+
+  // blips
+  for (let i = list.length - 1; i >= 0; i--) {
+    const p = list[i];
+    const x = cx + p.dx / cfg.radius * R, y = cy - p.dy / cfg.radius * R;
+    const diff = ((sw - p.brg * Math.PI / 180) % (Math.PI * 2) + Math.PI * 4) % (Math.PI * 2);
+    const glow = Math.max(0.22, 1 - diff / (Math.PI * 2) * 1.15);
+    const col = i === 0 ? RC.alert : RC.bright;
+    ctx.globalAlpha = glow; ctx.fillStyle = col; ctx.strokeStyle = col;
+    ctx.shadowColor = col; ctx.shadowBlur = 14 * d * glow;
+    ctx.beginPath(); ctx.arc(x, y, (i === 0 ? 5 : 3.5) * d, 0, Math.PI * 2); ctx.fill();
+    if (p.trk != null) {
+      const t = p.trk * Math.PI / 180, L = (8 + Math.min(p.gs, 500) / 30) * d;
+      ctx.lineWidth = 1.5 * d; ctx.beginPath(); ctx.moveTo(x, y); ctx.lineTo(x + Math.sin(t) * L, y - Math.cos(t) * L); ctx.stroke();
+    }
+    ctx.shadowBlur = 0;
+    if (i === 0) { const b = 11 * d; ctx.lineWidth = 1.2 * d; ctx.strokeRect(x - b, y - b, b * 2, b * 2); }
+    ctx.globalAlpha = Math.max(0.5, glow);
+    ctx.fillText(label(p), x + 10 * d, y - fs * 0.45);
+    ctx.fillStyle = i === 0 ? RC.alert : RC.mid;
+    ctx.fillText(fmtFL(p) + " " + Math.round(p.gs), x + 10 * d, y + fs * 0.45);
+  }
+  ctx.globalAlpha = 1; ctx.shadowBlur = 0;
+
+  // header
+  const hf = Math.max(18 * d, fs * 1.2);
+  ctx.font = `${hf}px VT323, monospace`; ctx.textBaseline = "top";
+  ctx.fillStyle = RC.bright; ctx.fillText("STANDBY.FLIGHTS // " + cfg.name, pad, pad);
+  ctx.fillStyle = RC.mid; ctx.textAlign = "right";
+  ctx.fillText(clock(), wide ? W - pad : W - pad, pad + (wide ? 0 : hf)); ctx.textAlign = "left";
+
+  // traffic list
+  let lx, ly, lw;
+  if (wide) { lx = W - listW; ly = pad * 3.5; lw = listW - pad; }
+  else { lx = pad; ly = cy + R + 44 * d; lw = W - pad * 2; }
+  const lf = Math.max(15 * d, Math.min(26 * d, lw / 22));
+  ctx.font = `${lf}px VT323, monospace`;
+  ctx.fillStyle = RC.mid; ctx.fillText("CALL     TYPE   ALT    NM  DIR", lx, ly);
+  ctx.fillStyle = RC.dim; ctx.fillRect(lx, ly + lf * 1.1, lw, Math.max(1, d));
+  const maxRows = Math.max(0, Math.floor((H - ly - lf * 3.2) / (lf * 1.15)));
+  list.slice(0, maxRows).forEach((p, i) => {
+    ctx.fillStyle = i === 0 ? RC.alert : RC.bright;
+    const row = label(p).padEnd(8).slice(0, 8) + " " + (p.type || "----").padEnd(5).slice(0, 5) + " " +
+      fmtFL(p).padStart(6) + " " + fmtDist(p.dist).padStart(4) + " " + dirName(p.brg).padStart(3);
+    ctx.fillText(row, lx, ly + lf * 1.5 + i * lf * 1.15);
+  });
+  if (!list.length) { ctx.fillStyle = RC.mid; ctx.fillText("NO CONTACTS", lx, ly + lf * 1.5); }
+  ctx.fillStyle = RC.mid; ctx.textBaseline = "bottom";
+  ctx.fillText(sourceLine(list.length), pad, H - pad * 0.8);
+}
+
+/* ================= split-flap board ================= */
+const board = document.getElementById("board");
+const FLAP = " ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789.-/";
+const COLS_ALL = [
+  { k: "call", w: 7, h: "FLIGHT" }, { k: "type", w: 4, h: "TYPE" }, { k: "alt", w: 5, h: "ALT" },
+  { k: "dist", w: 4, h: "NM" }, { k: "dir", w: 3, h: "DIR" }, { k: "status", w: 8, h: "STATUS" }
+];
+let FB = null;
+class Tile {
+  constructor(el) { this.el = el; this.span = el.firstChild; this.ch = " "; this.target = " "; this.timer = null; }
+  set(c) {
+    c = (c || " ").toUpperCase(); if (FLAP.indexOf(c) < 0) c = " ";
+    if (c === this.target) return; this.target = c;
+    if (!this.timer) this.timer = setTimeout(() => this.step(), Math.random() * 180);
+  }
+  step() {
+    if (this.ch === this.target) { this.timer = null; return; }
+    const L = FLAP.length, i = FLAP.indexOf(this.ch), j = FLAP.indexOf(this.target);
+    const dist = (j - i + L) % L, adv = dist <= 5 ? 1 : Math.ceil(dist / 5);
+    this.ch = FLAP[(i + adv) % L]; this.span.textContent = this.ch;
+    this.el.classList.remove("flip"); void this.el.offsetWidth; this.el.classList.add("flip");
+    this.timer = setTimeout(() => this.step(), 70);
+  }
+}
+function buildBoard() {
+  const W = innerWidth - 40;
+  let cols = COLS_ALL.slice(), tile;
+  const fit = cs => { const n = cs.reduce((s, c) => s + c.w, 0); return Math.floor(W / (n * 1.08 + (cs.length - 1) * 0.55)); };
+  tile = fit(cols);
+  if (tile < 22) { cols = cols.filter(c => c.k !== "status"); tile = fit(cols); }
+  tile = Math.max(12, Math.min(64, tile));
+  const rowH = tile * 1.38 + tile * 0.35;
+  const nRows = Math.max(3, Math.min(12, Math.floor((innerHeight - tile * 4.2) / rowH) - 1));
+  board.style.setProperty("--tile", tile + "px");
+  board.innerHTML = "";
+  const title = document.createElement("div"); title.className = "b-title";
+  title.innerHTML = '<span class="name"></span><span class="clock"></span>';
+  board.appendChild(title);
+  const head = document.createElement("div"); head.className = "b-head";
+  cols.forEach(c => { const g = document.createElement("div"); g.className = "b-col"; g.style.width = `calc(var(--tile) * ${c.w} + var(--tile) * 0.08 * ${c.w - 1})`; g.textContent = c.h; head.appendChild(g); });
+  board.appendChild(head);
+  const rows = [];
+  for (let r = 0; r < nRows; r++) {
+    const row = document.createElement("div"); row.className = "b-row";
+    const cells = {};
+    cols.forEach(c => {
+      const g = document.createElement("div"); g.className = "b-col"; cells[c.k] = [];
+      for (let i = 0; i < c.w; i++) { const t = document.createElement("div"); t.className = "tile"; t.innerHTML = "<span> </span>"; g.appendChild(t); cells[c.k].push(new Tile(t)); }
+      row.appendChild(g);
+    });
+    board.appendChild(row); rows.push({ el: row, cells });
+  }
+  const foot = document.createElement("div"); foot.className = "b-foot"; board.appendChild(foot);
+  FB = { cols, rows, title, foot };
+}
+function boardText(p, k, w) {
+  let s = "";
+  if (p) {
+    if (k === "call") s = label(p);
+    else if (k === "type") s = p.type || "";
+    else if (k === "alt") s = fmtFL(p).padStart(w);
+    else if (k === "dist") s = fmtDist(p.dist).padStart(w);
+    else if (k === "dir") s = dirName(p.brg).padStart(w);
+    else if (k === "status") s = status(p);
+  }
+  return s.padEnd(w).slice(0, w);
+}
+function updateBoard() {
+  if (!FB) buildBoard();
+  const list = view(Date.now());
+  FB.title.querySelector(".name").textContent = "standby.flights · " + cfg.name;
+  FB.title.querySelector(".clock").textContent = clock();
+  FB.rows.forEach((r, i) => {
+    const p = list[i];
+    r.el.classList.toggle("hot", !!p && i === 0 && p.dist < 2);
+    FB.cols.forEach(c => { const s = boardText(p, c.k, c.w); r.cells[c.k].forEach((t, j) => t.set(s[j])); });
+  });
+  FB.foot.textContent = sourceLine(list.length);
+}
+
+/* ================= loop + skins ================= */
+let skin = cfg.skin, boardTimer = null;
+const scan = document.getElementById("scan");
+function setSkin(s) {
+  skin = s; cfg.skin = s; saveCfg();
+  document.querySelectorAll("[data-skin]").forEach(b => b.setAttribute("aria-pressed", String(b.dataset.skin === s)));
+  board.hidden = s !== "flap"; cv.hidden = s === "flap"; scan.hidden = s !== "radar";
+  WALL.key = "";
+  clearInterval(boardTimer);
+  if (s === "flap") { buildBoard(); updateBoard(); boardTimer = setInterval(updateBoard, 3000); }
+}
+function frame() {
+  const now = Date.now();
+  if (!document.hidden && skin !== "flap") {
+    const list = view(now);
+    if (skin === "radar") radarFrame(now, list);
+    else if (skin === "wall") wallFrame(now, list);
+    else { setupDots(skin); composeDots(skin, now, list); blitDots(); }
+  }
+  setTimeout(() => requestAnimationFrame(frame), skin === "radar" ? 30 : 50);
+}
+
+/* ================= controls ================= */
+const ui = document.getElementById("ui");
+let idleT = null;
+function wake() { ui.classList.remove("idle"); clearTimeout(idleT); idleT = setTimeout(() => ui.classList.add("idle"), 5000); }
+let lock = null;
+async function keepAwake() { try { if (navigator.wakeLock && !lock) { lock = await navigator.wakeLock.request("screen"); lock.addEventListener("release", () => { lock = null; }); } } catch (e) {} }
+document.getElementById("stage").addEventListener("click", () => { wake(); keepAwake(); });
+document.querySelectorAll("[data-skin]").forEach(b => b.addEventListener("click", () => { setSkin(b.dataset.skin); wake(); }));
+document.getElementById("btnFull").addEventListener("click", () => {
+  const el = document.documentElement;
+  try { if (document.fullscreenElement) document.exitFullscreen(); else (el.requestFullscreen || el.webkitRequestFullscreen).call(el); } catch (e) {}
+  keepAwake();
+});
+
+const $ = id => document.getElementById(id);
+const set = $("settings");
+function kioskURL() {
+  const q = new URLSearchParams({ name: cfg.name, lat: cfg.lat.toFixed(4), lon: cfg.lon.toFixed(4), r: cfg.radius, elev: cfg.elev, poll: cfg.poll, skin: cfg.skin });
+  return location.origin + location.pathname + "?" + q.toString();
+}
+function openSettings() {
+  $("fName").value = cfg.name; $("fLat").value = cfg.lat; $("fLon").value = cfg.lon;
+  $("fRad").value = cfg.radius; $("fElev").value = cfg.elev; $("fPoll").value = cfg.poll;
+  $("kiosk").textContent = kioskURL();
+  $("msg").textContent = S.demo && S.errs && S.errs.length ? "Showing demo traffic. " + S.errs.join(" | ") : (S.lastOk ? "Live data from " + S.source + "." : "");
+  set.hidden = false;
+}
+$("btnSet").addEventListener("click", openSettings);
+$("btnClose").addEventListener("click", () => { set.hidden = true; });
+$("btnSave").addEventListener("click", () => {
+  cfg = sanitize(Object.assign({}, cfg, {
+    name: $("fName").value, lat: parseFloat($("fLat").value), lon: parseFloat($("fLon").value),
+    radius: parseFloat($("fRad").value), elev: parseFloat($("fElev").value), poll: parseFloat($("fPoll").value)
+  }));
+  saveCfg(); $("kiosk").textContent = kioskURL(); $("msg").textContent = "Saved. Refreshing traffic.";
+  if (S.demo) { stopDemo(); S.planes = []; }
+  if (FB) { FB = null; if (skin === "flap") { buildBoard(); updateBoard(); } }
+  poll();
+});
+/* ---------- location lookup: OpenStreetMap Nominatim for places, USGS for ground elevation ---------- */
+function placeName(addr) {
+  if (!addr) return "";
+  const town = addr.city || addr.town || addr.village || addr.hamlet || addr.suburb || addr.county || "";
+  const iso = addr["ISO3166-2-lvl4"] || "";
+  const st = iso.startsWith("US-") ? iso.slice(3) : (addr.state || "");
+  return (town + " " + st).trim().toUpperCase().slice(0, 24);
+}
+async function lookupElevation(lat, lon) {
+  try {
+    const j = await fetchJSON(`https://epqs.nationalmap.gov/v1/json?x=${lon}&y=${lat}&units=Feet&wkid=4326&includeDate=false`, 8000);
+    const v = parseFloat(j.value);
+    return isFinite(v) && v > -1000 ? Math.round(v) : null;
+  } catch (e) { return null; }
+}
+async function reverseName(lat, lon) {
+  try {
+    const j = await fetchJSON(`https://nominatim.openstreetmap.org/reverse?format=jsonv2&zoom=14&addressdetails=1&lat=${lat}&lon=${lon}`, 8000);
+    return placeName(j.address);
+  } catch (e) { return ""; }
+}
+async function applySpot(lat, lon, name) {
+  $("fLat").value = lat.toFixed(4); $("fLon").value = lon.toFixed(4);
+  $("msg").textContent = "Found it. Checking ground elevation...";
+  const [elev, nm] = await Promise.all([lookupElevation(lat, lon), name ? Promise.resolve(name) : reverseName(lat, lon)]);
+  if (elev != null) $("fElev").value = elev;
+  if (nm) $("fName").value = nm;
+  $("msg").textContent = (nm ? nm + ". " : "") + (elev != null ? "Elevation " + elev.toLocaleString("en-US") + " ft. " : "") + "Press Save to start watching.";
+}
+async function findPlace() {
+  const q = $("fWhere").value.trim();
+  if (!q) { $("msg").textContent = "Type an address, city, ZIP, or coordinates first."; return; }
+  const m = q.match(/^\s*(-?\d{1,2}(?:\.\d+)?)\s*[,\s]\s*(-?\d{1,3}(?:\.\d+)?)\s*$/);
+  if (m) {
+    const lat = parseFloat(m[1]), lon = parseFloat(m[2]);
+    if (Math.abs(lat) > 90 || Math.abs(lon) > 180) { $("msg").textContent = "Those coordinates are out of range. Use latitude, then longitude."; return; }
+    await applySpot(lat, lon, "");
+    return;
+  }
+  $("msg").textContent = "Searching...";
+  try {
+    const j = await fetchJSON(`https://nominatim.openstreetmap.org/search?format=jsonv2&countrycodes=us&limit=1&addressdetails=1&q=${encodeURIComponent(q)}`, 10000);
+    if (!j.length) { $("msg").textContent = "No US match for that. Try adding the city and state, or a ZIP code."; return; }
+    await applySpot(parseFloat(j[0].lat), parseFloat(j[0].lon), placeName(j[0].address));
+  } catch (e) {
+    $("msg").textContent = "The address search didn't answer. Try again, or type coordinates like 37.17, -113.29.";
+  }
+}
+$("btnFind").addEventListener("click", findPlace);
+$("fWhere").addEventListener("keydown", e => { if (e.key === "Enter") { e.preventDefault(); findPlace(); } });
+$("btnGeo").addEventListener("click", () => {
+  if (!navigator.geolocation) { $("msg").textContent = "This browser can't share location. Type an address instead."; return; }
+  $("msg").textContent = "Finding this device...";
+  navigator.geolocation.getCurrentPosition(
+    pos => { applySpot(pos.coords.latitude, pos.coords.longitude, ""); },
+    () => { $("msg").textContent = "Location was blocked. Type an address instead."; },
+    { enableHighAccuracy: true, timeout: 10000 }
+  );
+});
+$("btnCopy").addEventListener("click", () => {
+  const t = kioskURL();
+  const fallback = () => { const r = document.createRange(); r.selectNodeContents($("kiosk")); const s = getSelection(); s.removeAllRanges(); s.addRange(r); $("msg").textContent = "Link selected. Copy it from here."; };
+  try { navigator.clipboard.writeText(t).then(() => { $("msg").textContent = "Link copied."; }, fallback); } catch (e) { fallback(); }
+});
+
+window.addEventListener("resize", () => { sizeCanvas(); DOT.key = ""; if (skin === "flap") { buildBoard(); updateBoard(); } });
+document.addEventListener("visibilitychange", () => { if (!document.hidden) { poll(); keepAwake(); } });
+
+/* ================= boot ================= */
+sizeCanvas();
+const fontsReady = document.fonts && document.fonts.load
+  ? Promise.all(["8px Silkscreen", "20px VT323", "600 20px 'Barlow Condensed'"].map(f => document.fonts.load(f).catch(() => {})))
+  : Promise.resolve();
+// Read this before setSkin(), which saves settings and would make every visitor look returning
+let saved = null;
+try { saved = localStorage.getItem("standby.cfg"); } catch (e) {}
+Promise.race([fontsReady, new Promise(r => setTimeout(r, 2500))]).then(() => {
+  setSkin(skin); wake(); poll(); frame();
+  const q = new URLSearchParams(location.search);
+  if (!saved && !q.get("lat")) { openSettings(); $("fWhere").focus(); }
+});
+})();
+</script>
+</body>
+</html>

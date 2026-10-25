@@ -1,0 +1,11 @@
+# Cloudflare Pages project for standby.flights.
+# Static files live in public/, Pages Functions in functions/ (picked up automatically).
+# No D1, KV or R2: the relay only uses the edge cache (caches.default), which needs no binding.
+# If bindings are ever added, give preview and production their own resources under the env blocks below.
+name = "standby-flights"
+pages_build_output_dir = "public"
+compatibility_date = "2026-10-01"
+
+[env.preview]
+
+[env.production]
