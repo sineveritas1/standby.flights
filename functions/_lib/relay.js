@@ -5,12 +5,15 @@ const UA = "StandbyFlights/1.0 (+https://standby.flights)";
 // rate-limiting does not drop its planes. Tested from Cloudflare (Oct 2026): adsb.lol answers but
 // sometimes returns 429; adsb.fi and airplanes.live return 403 to datacenter IPs; OpenSky timed out.
 // every: seconds between real requests to that source. keep: seconds its last good answer may stand in.
-// OpenSky allows 400 anonymous requests a day, so it is asked every 4 minutes at most.
+// Daily limits decide the pace: adsb.lol sends "500;w=86400" (500 requests a day per IP) and
+// airplanes.live's free tier is about the same, so each is asked every 3 minutes (480 a day).
+// OpenSky allows 400 anonymous requests a day: every 4 minutes. adsb.fi publishes no limit; once a
+// minute is a polite guess. The page moves planes along their track between updates.
 const SOURCES = [
-  { name: "adsb.lol",       every: 8,   keep: 60, url: (la, lo, r) => `https://api.adsb.lol/v2/point/${la}/${lo}/${r}` },
-  { name: "adsb.fi",        every: 8,   keep: 60, url: (la, lo, r) => `https://opendata.adsb.fi/api/v2/lat/${la}/lon/${lo}/dist/${r}` },
-  { name: "airplanes.live", every: 8,   keep: 60, url: (la, lo, r) => `https://api.airplanes.live/v2/point/${la}/${lo}/${r}` },
-  { name: "opensky",        every: 240, keep: 60, url: openskyURL, convert: fromOpenSky }
+  { name: "adsb.lol",       every: 180, keep: 300, url: (la, lo, r) => `https://api.adsb.lol/v2/point/${la}/${lo}/${r}` },
+  { name: "adsb.fi",        every: 60,  keep: 180, url: (la, lo, r) => `https://opendata.adsb.fi/api/v2/lat/${la}/lon/${lo}/dist/${r}` },
+  { name: "airplanes.live", every: 180, keep: 300, url: (la, lo, r) => `https://api.airplanes.live/v2/point/${la}/${lo}/${r}` },
+  { name: "opensky",        every: 240, keep: 300, url: openskyURL, convert: fromOpenSky }
 ];
 
 function openskyURL(la, lo, r) {

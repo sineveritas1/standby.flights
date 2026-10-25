@@ -361,7 +361,8 @@ function stopDemo() { S.demo = false; clearInterval(demoTimer); demoTimer = null
 
 /* ---------- geometry ---------- */
 function project(p, now) {
-  const age = Math.min(60, (now - p.t) / 1000 + (p.seen || 0));
+  // Sources are asked every few minutes (daily limits), so keep moving planes along their track that long
+  const age = Math.min(300, (now - p.t) / 1000 + (p.seen || 0));
   let lat = p.lat, lon = p.lon;
   if (!p.ground && p.gs > 0 && p.trk != null) {
     const d = p.gs * age / 3600, tr = p.trk * Math.PI / 180;
