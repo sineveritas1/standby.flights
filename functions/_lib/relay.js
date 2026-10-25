@@ -1,19 +1,24 @@
 // standby.flights relay: fetches nearby aircraft server-side so the browser never hits cross-site blocks.
 const UA = "StandbyFlights/1.0 (+https://standby.flights)";
-// Order comes from live tests from Cloudflare (Oct 2026): adsb.lol is the only one that answers, and it
-// sometimes returns 429 because Cloudflare IPs are shared. adsb.fi and airplanes.live return 403 to
-// datacenter IPs, OpenSky times out. They stay in the list in case that changes.
+// Every source is asked in parallel and the answers are merged by ICAO hex, so a plane seen by two
+// networks shows once. Each source keeps its own short cache and "last good" copy, so one source
+// rate-limiting does not drop its planes. Tested from Cloudflare (Oct 2026): adsb.lol answers but
+// sometimes returns 429; adsb.fi and airplanes.live return 403 to datacenter IPs; OpenSky timed out.
+// every: seconds between real requests to that source. keep: seconds its last good answer may stand in.
+// OpenSky allows 400 anonymous requests a day, so it is asked every 4 minutes at most.
 const SOURCES = [
-  { name: "adsb.lol",       url: (la, lo, r) => `https://api.adsb.lol/v2/point/${la}/${lo}/${r}` },
-  { name: "adsb.fi",        url: (la, lo, r) => `https://opendata.adsb.fi/api/v2/lat/${la}/lon/${lo}/dist/${r}` },
-  { name: "opensky",        url: openskyURL, convert: fromOpenSky },
-  { name: "airplanes.live", url: (la, lo, r) => `https://api.airplanes.live/v2/point/${la}/${lo}/${r}` }
+  { name: "adsb.lol",       every: 8,   keep: 60, url: (la, lo, r) => `https://api.adsb.lol/v2/point/${la}/${lo}/${r}` },
+  { name: "adsb.fi",        every: 8,   keep: 60, url: (la, lo, r) => `https://opendata.adsb.fi/api/v2/lat/${la}/lon/${lo}/dist/${r}` },
+  { name: "airplanes.live", every: 8,   keep: 60, url: (la, lo, r) => `https://api.airplanes.live/v2/point/${la}/${lo}/${r}` },
+  { name: "opensky",        every: 240, keep: 60, url: openskyURL, convert: fromOpenSky }
 ];
 
 function openskyURL(la, lo, r) {
   const dLat = r / 60, dLon = r / (60 * Math.cos(la * Math.PI / 180));
-  return `https://opensky-network.org/api/states/all?lamin=${(la - dLat).toFixed(3)}&lomin=${(lo - dLon).toFixed(3)}&lamax=${(la + dLat).toFixed(3)}&lomax=${(lo + dLon).toFixed(3)}`;
+  return `https://opensky-network.org/api/states/all?extended=1&lamin=${(la - dLat).toFixed(3)}&lomin=${(lo - dLon).toFixed(3)}&lamax=${(la + dLat).toFixed(3)}&lomax=${(lo + dLon).toFixed(3)}`;
 }
+// OpenSky category numbers to the ADS-B emitter categories the other feeds use
+const OSKY_CAT = { 2: "A1", 3: "A2", 4: "A3", 5: "A4", 6: "A5", 7: "A6", 8: "A7", 9: "B1", 10: "B2", 11: "B3", 12: "B4", 14: "B6", 15: "B7" };
 function fromOpenSky(j) {
   const ac = (j.states || []).filter(s => s[5] != null && s[6] != null).map(s => ({
     hex: s[0], flight: s[1] || "", lat: s[6], lon: s[5],
@@ -21,6 +26,8 @@ function fromOpenSky(j) {
     gs: s[9] != null ? s[9] * 1.94384 : undefined,
     track: s[10] != null ? s[10] : undefined,
     baro_rate: s[11] != null ? s[11] * 196.85 : undefined,
+    squawk: s[14] || undefined,
+    category: OSKY_CAT[s[17]],
     seen_pos: j.time && s[3] ? Math.max(0, j.time - s[3]) : 0
   }));
   return { ac };
@@ -41,6 +48,46 @@ const json = (obj, status, extra) => new Response(JSON.stringify(obj), {
   headers: Object.assign({ "Content-Type": "application/json", "Access-Control-Allow-Origin": "*", "Cache-Control": "no-store" }, extra || {})
 });
 
+// Fields copied from any source that has them when the source with the freshest position does not
+const FILL = ["flight", "r", "t", "desc", "ownOp", "year", "category", "squawk", "alt_baro", "alt_geom", "gs", "track", "baro_rate", "geom_rate", "emergency"];
+
+function mergeSources(lists) {
+  const byHex = new Map();
+  for (const { name, ac } of lists) {
+    for (const a of ac) {
+      if (typeof a.lat !== "number" || typeof a.lon !== "number" || !a.hex) continue;
+      const key = String(a.hex).toLowerCase();
+      const seen = typeof a.seen_pos === "number" ? a.seen_pos : 99;
+      const cur = byHex.get(key);
+      if (!cur) { byHex.set(key, { best: a, bestSeen: seen, all: [a], src: [name], flags: a.dbFlags | 0 }); continue; }
+      cur.all.push(a); cur.src.push(name); cur.flags |= a.dbFlags | 0;
+      if (seen < cur.bestSeen) { cur.best = a; cur.bestSeen = seen; }
+    }
+  }
+  const out = [];
+  for (const e of byHex.values()) {
+    const m = Object.assign({}, e.best);
+    for (const f of FILL) {
+      if (m[f] != null && m[f] !== "") continue;
+      for (const o of e.all) if (o[f] != null && o[f] !== "") { m[f] = o[f]; break; }
+    }
+    if (e.flags) m.dbFlags = e.flags;
+    m.src = e.src;
+    out.push(m);
+  }
+  // TIS-B and other non-ICAO targets (hex starts with ~) can echo a plane already listed under its real
+  // address. Drop one when a real target sits within 0.5 NM and 300 ft of it.
+  const real = out.filter(a => a.hex[0] !== "~");
+  return out.filter(a => {
+    if (a.hex[0] !== "~") return true;
+    return !real.some(b => {
+      const dy = (a.lat - b.lat) * 60, dx = (a.lon - b.lon) * 60 * Math.cos(a.lat * Math.PI / 180);
+      const alt = typeof a.alt_baro === "number" && typeof b.alt_baro === "number" ? Math.abs(a.alt_baro - b.alt_baro) : 0;
+      return Math.hypot(dx, dy) < 0.5 && alt < 300;
+    });
+  });
+}
+
 export async function planes(request, ctx) {
   const u = new URL(request.url);
   const la = parseFloat(u.searchParams.get("lat")), lo = parseFloat(u.searchParams.get("lon"));
@@ -48,42 +95,50 @@ export async function planes(request, ctx) {
   if (!isFinite(la) || !isFinite(lo) || Math.abs(la) > 90 || Math.abs(lo) > 180) return json({ error: "lat and lon are required" }, 400);
   r = Math.max(2, Math.min(250, Math.round(isFinite(r) ? r : 30)));
   const key = `${la.toFixed(3)}/${lo.toFixed(3)}/${r}`;
-
-  // 8 second shared cache so several screens or fast polling stay polite to the volunteer networks.
-  // A second "last good" copy lives 2 minutes and is served when every source fails, so a rate limit
-  // shows slightly old planes (the page dead-reckons them forward) instead of an error.
   const cache = caches.default;
-  const cacheKey = new Request("https://standby.cache/" + key);
-  const staleKey = new Request("https://standby.cache/stale/" + key);
-  const hit = await cache.match(cacheKey);
-  if (hit) return json(await hit.json());
   const save = (k, body, secs) => {
     const p = cache.put(k, new Response(body, { headers: { "Content-Type": "application/json", "Cache-Control": "max-age=" + secs } }));
     if (ctx && ctx.waitUntil) ctx.waitUntil(p); else return p;
   };
 
-  const errors = [];
-  for (const s of SOURCES) {
-    try {
-      let j = await getJSON(s.url(la, lo, r), 5000);
-      if (s.convert) j = s.convert(j);
-      const out = { source: s.name, now: Date.now(), ac: j.ac || j.aircraft || [] };
-      const body = JSON.stringify(out);
-      await save(cacheKey, body, 8);
-      await save(staleKey, body, 120);
-      return json(out);
-    } catch (e) { errors.push(s.name + " " + (e.message || e)); }
-  }
-  const old = await cache.match(staleKey);
-  if (old) {
-    const out = await old.json();
-    const age = Math.max(0, (Date.now() - out.now) / 1000);
-    out.ac.forEach(a => { a.seen_pos = (typeof a.seen_pos === "number" ? a.seen_pos : 0) + age; });
-    out.source += " cached";
-    out.errors = errors;
-    return json(out);
-  }
-  return json({ error: "No flight source answered: " + errors.join("; ") }, 502);
+  // Each source has a fresh copy (asked again after `every` seconds) and a last good copy (`keep` seconds)
+  const report = {};
+  const lists = await Promise.all(SOURCES.map(async s => {
+    const freshKey = new Request(`https://standby.cache/src/${s.name}/${key}`);
+    const goodKey = new Request(`https://standby.cache/good/${s.name}/${key}`);
+    let data = null;
+    const hit = await cache.match(freshKey);
+    if (hit) data = await hit.json();
+    else {
+      try {
+        let j = await getJSON(s.url(la, lo, r), 6000);
+        if (s.convert) j = s.convert(j);
+        data = { now: Date.now(), ac: j.ac || j.aircraft || [] };
+        const body = JSON.stringify(data);
+        await save(freshKey, body, s.every);
+        await save(goodKey, body, s.keep);
+      } catch (e) {
+        report[s.name] = String(e.message || e);
+        // Remember the failure for `every` seconds too, so a blocked source is not hammered
+        await save(freshKey, JSON.stringify({ failed: report[s.name] }), s.every);
+      }
+    }
+    if (data && data.failed) { report[s.name] = data.failed; data = null; }
+    if (!data) {
+      const good = await cache.match(goodKey);
+      if (good) { data = await good.json(); report[s.name] += " (using last good)"; }
+    }
+    if (!data) return { name: s.name, ac: [], ok: false };
+    const age = Math.max(0, (Date.now() - data.now) / 1000);
+    const ac = age < 1 ? data.ac : data.ac.map(a => Object.assign({}, a, { seen_pos: (typeof a.seen_pos === "number" ? a.seen_pos : 0) + age }));
+    if (!report[s.name]) report[s.name] = ac.length + " aircraft" + (age >= 1 ? ", " + Math.round(age) + "s old" : "");
+    else report[s.name] += ", " + ac.length + " aircraft";
+    return { name: s.name, ac, ok: true };
+  }));
+
+  if (!lists.some(l => l.ok)) return json({ error: "No flight source answered", sources: report }, 502);
+  const ac = mergeSources(lists);
+  return json({ source: lists.filter(l => l.ok).map(l => l.name).join("+"), now: Date.now(), sources: report, ac });
 }
 
 // ---- routes: origin/destination by callsign (adsbdb first, adsb.lol routeset as backup) ----
