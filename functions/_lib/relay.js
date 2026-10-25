@@ -1,10 +1,11 @@
 // standby.flights relay: fetches nearby aircraft server-side so the browser never hits cross-site blocks.
 const UA = "StandbyFlights/1.0 (+https://standby.flights)";
-// Order comes from live tests from a datacenter (Oct 2026): adsb.fi answered fast, adsb.lol was slow or
-// timed out, OpenSky answered, airplanes.live returned 403 and asks projects to contact them first.
+// Order comes from live tests from Cloudflare (Oct 2026): adsb.lol is the only one that answers, and it
+// sometimes returns 429 because Cloudflare IPs are shared. adsb.fi and airplanes.live return 403 to
+// datacenter IPs, OpenSky times out. They stay in the list in case that changes.
 const SOURCES = [
-  { name: "adsb.fi",        url: (la, lo, r) => `https://opendata.adsb.fi/api/v2/lat/${la}/lon/${lo}/dist/${r}` },
   { name: "adsb.lol",       url: (la, lo, r) => `https://api.adsb.lol/v2/point/${la}/${lo}/${r}` },
+  { name: "adsb.fi",        url: (la, lo, r) => `https://opendata.adsb.fi/api/v2/lat/${la}/lon/${lo}/dist/${r}` },
   { name: "opensky",        url: openskyURL, convert: fromOpenSky },
   { name: "airplanes.live", url: (la, lo, r) => `https://api.airplanes.live/v2/point/${la}/${lo}/${r}` }
 ];
@@ -48,11 +49,18 @@ export async function planes(request, ctx) {
   r = Math.max(2, Math.min(250, Math.round(isFinite(r) ? r : 30)));
   const key = `${la.toFixed(3)}/${lo.toFixed(3)}/${r}`;
 
-  // 5 second shared cache so several screens or fast polling stay polite to the volunteer networks
+  // 8 second shared cache so several screens or fast polling stay polite to the volunteer networks.
+  // A second "last good" copy lives 2 minutes and is served when every source fails, so a rate limit
+  // shows slightly old planes (the page dead-reckons them forward) instead of an error.
   const cache = caches.default;
   const cacheKey = new Request("https://standby.cache/" + key);
+  const staleKey = new Request("https://standby.cache/stale/" + key);
   const hit = await cache.match(cacheKey);
   if (hit) return json(await hit.json());
+  const save = (k, body, secs) => {
+    const p = cache.put(k, new Response(body, { headers: { "Content-Type": "application/json", "Cache-Control": "max-age=" + secs } }));
+    if (ctx && ctx.waitUntil) ctx.waitUntil(p); else return p;
+  };
 
   const errors = [];
   for (const s of SOURCES) {
@@ -60,10 +68,20 @@ export async function planes(request, ctx) {
       let j = await getJSON(s.url(la, lo, r), 5000);
       if (s.convert) j = s.convert(j);
       const out = { source: s.name, now: Date.now(), ac: j.ac || j.aircraft || [] };
-      const put = new Response(JSON.stringify(out), { headers: { "Content-Type": "application/json", "Cache-Control": "max-age=5" } });
-      if (ctx && ctx.waitUntil) ctx.waitUntil(cache.put(cacheKey, put)); else await cache.put(cacheKey, put);
+      const body = JSON.stringify(out);
+      await save(cacheKey, body, 8);
+      await save(staleKey, body, 120);
       return json(out);
     } catch (e) { errors.push(s.name + " " + (e.message || e)); }
+  }
+  const old = await cache.match(staleKey);
+  if (old) {
+    const out = await old.json();
+    const age = Math.max(0, (Date.now() - out.now) / 1000);
+    out.ac.forEach(a => { a.seen_pos = (typeof a.seen_pos === "number" ? a.seen_pos : 0) + age; });
+    out.source += " cached";
+    out.errors = errors;
+    return json(out);
   }
   return json({ error: "No flight source answered: " + errors.join("; ") }, 502);
 }

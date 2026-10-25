@@ -3,7 +3,7 @@
 A full-screen display of the planes flying over a chosen spot, built to run on an old tablet like a retro flight board. It uses free, keyless ADS-B data and shows the closest plane with its airline, route, type, altitude, speed and look-up angle, in five skins: LED, VFD, Radar, split-flap Board, and full-color Wall. Personal project of Zack Almaguer.
 
 - **Live URL:** https://standby.flights (Cloudflare Pages project `standby-flights`, also at standby-flights.pages.dev)
-- **Status:** working. Live data and route lookups verified through the local relay on 2026-10-25. Not yet deployed.
+- **Status:** live at standby-flights.pages.dev. Custom domain not attached yet.
 
 ## How it is built
 
@@ -18,7 +18,7 @@ wrangler.toml              Pages config (output dir: public)
 docs/HANDOFF.md            Original design handoff: skins, data flow, provider notes
 ```
 
-The page polls `/api/planes` every 8 seconds. The relay tries adsb.fi, adsb.lol, OpenSky, then airplanes.live, and caches each answer for 5 seconds at the edge. Routes come from adsbdb, with the adsb.lol routeset as backup, cached 6 hours. If no source answers for a minute the page shows clearly labeled DEMO TRAFFIC and keeps retrying.
+The page polls `/api/planes` every 8 seconds. The relay tries adsb.lol, adsb.fi, OpenSky, then airplanes.live, and caches each answer for 8 seconds at the edge. From Cloudflare only adsb.lol answers today, so when it rate-limits, the relay serves the last good answer for up to 2 minutes. Routes come from adsbdb, with the adsb.lol routeset as backup, cached 6 hours. If no source answers for a minute the page shows clearly labeled DEMO TRAFFIC and keeps retrying.
 
 ## Run locally
 
