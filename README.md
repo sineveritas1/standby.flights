@@ -25,9 +25,15 @@ The page polls `/api/planes` every 8 seconds. The relay asks adsb.lol, adsb.fi, 
 
 ## Fly mode
 
-The Fly button opens `/fly`, a 16-bit flight game. You fly your own plane over a pixel-art map of the lower 48 (coastlines and state lines from the free world-atlas and us-atlas files on jsDelivr; terrain colors are painted by region). Map view is top-down; side view is a side-scroller whose ground is read from the real map along your heading. Real planes from `/api/planes` fly around you, sorted into airline, cargo, military, government, bizjet, private and helicopter. Fly within about 3 miles and 3,000 feet of one to log it. Demo traffic fills in when no source answers and is never logged. The logbook and your last position are saved in this browser only.
+The Fly button opens `/fly`, a 16/32-bit style flight game over the real US with the real planes around you. Three views:
 
-Controls: arrows turn and climb, THR+ and THR- set speed, LVL levels off, ZOOM steps from the whole US down to close in, X1 speeds up your plane only, GO jumps to an airport. Keyboard: arrow keys or WASD, Q and E for throttle, V view, Z zoom, T time.
+- **3D:** voxel terrain like 90s flight games. Ground height from Mapzen Terrain Tiles on AWS (open data), colors from USGS National Map imagery (public domain), drawn in 15-bit color with distance haze, day and night lighting, and your plane from behind, banking into turns.
+- **Map:** top-down, with satellite (USGS), street (OpenStreetMap, credited on screen, map view only) or the pixel-art map built from world-atlas and us-atlas.
+- **Side:** a side-scroller whose ground is the real elevation profile along your heading.
+
+Real planes from `/api/planes` fly around you, sorted into airline, cargo, military, government, bizjet, private and helicopter. Fly within about 3 miles and 3,000 feet of one to log it. Demo traffic fills in when no source answers and is never logged. Height above ground is real: PULL UP warns you, and hitting the ground resets you 3,000 ft up. The logbook, last position and chosen view are saved in this browser only.
+
+Controls: arrows turn and climb, THR+ and THR- set speed, LVL levels off, 3D/MAP/SIDE switches view, SAT/STREET/PIXEL switches map style, ZOOM (map view) steps from the whole US to close in, X1 speeds up your plane only, GO jumps to an airport. Keyboard: arrow keys or WASD, Q and E for throttle, V view, M map style, Z zoom, T time. Add `?hour=13` to the address to force a time of day.
 
 ## Run locally
 

@@ -16,7 +16,13 @@ A retro flight-board display of planes overhead, for an old tablet. Personal pro
 - Each source keeps a last good copy for a few minutes, with `seen_pos` aged so the page dead-reckons it forward.
 - adsbdb route shape verified live. adsb.lol routeset could not be reached from the sandbox, so its shape is still unverified.
 - The page avoids optional chaining and `??` so it runs on old tablet browsers. Keep it that way.
-- Fly mode (`public/fly.html`): 16-bit game in its own file so the display stays small. Same drawn-in-code pixel art approach as redrockpals.pages.dev (low-res buffer, shapes snapped to whole pixels, Silkscreen). Short side of the screen is 200 game pixels. Map raster is 0.04 degree cells built in the browser from world-atlas land-50m and us-atlas states-10m; Great Lakes and a few other lakes are hand-placed ovals because the state shapes stop at the shoreline. Region terrain is a hand-written rule set (`terrainUS`), not real elevation. Traffic is fetched per 1 degree square with r=100 so the relay cache stays shared. Never log demo planes. The reference images Zack sent were stock art: style reference only, nothing copied.
+- Fly mode (`public/fly.html`): its own file so the display stays small. Pixel art drawn in code like redrockpals.pages.dev (low-res buffer, shapes snapped to whole pixels, Silkscreen). Short side is 224 game pixels; colors cut to 15-bit like a Super NES.
+  - 3D view is voxel terrain (Comanche style): heights from AWS Terrain Tiles (terrarium PNGs, open data), colors from USGS National Map imagery (public domain). Both send CORS headers. Work happens in Web Mercator pixels at zoom 15; detail drops with distance. Columns double up on slow devices.
+  - OpenStreetMap tiles are used in map view only, to respect OSM's tile policy, with the credit on screen. EOX Sentinel-2 was skipped (non-commercial license); Stadia needs a key.
+  - Tiles are cached in memory, about 110 kept, least recently used dropped.
+  - The pixel map raster is 0.04 degree cells from world-atlas land-50m and us-atlas states-10m; Great Lakes and a few other lakes are hand-placed ovals. Region terrain colors are a hand-written rule set (`terrainUS`).
+  - Traffic is fetched per 1 degree square with r=100 so the relay cache stays shared. Never log demo planes.
+  - Zack's reference images were stock art and Microsoft Flight Simulator covers: style reference only, nothing copied, no real airline or game branding.
 - Geocoding is OpenStreetMap Nominatim straight from the browser; fine at personal volume.
 
 ## Current step

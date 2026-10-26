@@ -7,13 +7,14 @@
 <meta name="mobile-web-app-capable" content="yes">
 <meta name="theme-color" content="#000000">
 <title>standby.flights fly</title>
+<meta name="description" content="Fly over the real US in a 16-bit style flight game with the real planes around you.">
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Silkscreen&display=swap">
 <script src="https://cdn.jsdelivr.net/npm/topojson-client@3.1.0/dist/topojson-client.min.js"></script>
 <style>
-/* standby.flights FLY: a 16-bit flight game over a pixel-art US with the real planes around you.
-   Everything is drawn into a low-res buffer and scaled up without smoothing. */
+/* standby.flights FLY: a 16/32-bit style flight game over the real US with the real planes around you.
+   Everything is drawn into a low-res buffer in 15-bit color and scaled up without smoothing. */
 :root {
   --ink: #0b0d18; --panel: rgba(12, 14, 28, 0.86); --line: rgba(255, 255, 255, 0.16);
   --fg: #f2ecdc; --dim: #9aa0b8; --accent: #ffb000; --hot: #ff5c3a;
@@ -26,7 +27,10 @@ body { font-family: Silkscreen, ui-monospace, monospace; color: var(--fg); user-
 #cv { position: fixed; inset: 0; width: 100%; height: 100%; display: block; image-rendering: pixelated; image-rendering: crisp-edges; }
 
 /* top buttons */
-#top { position: fixed; top: max(8px, env(safe-area-inset-top, 0px)); right: max(8px, env(safe-area-inset-right, 0px)); display: flex; gap: 6px; z-index: 5; }
+#top { position: fixed; top: max(8px, env(safe-area-inset-top, 0px)); right: max(8px, env(safe-area-inset-right, 0px)); left: max(8px, env(safe-area-inset-left, 0px)); display: flex; flex-wrap: wrap; justify-content: flex-end; gap: 6px; z-index: 5; pointer-events: none; }
+#top button { pointer-events: auto; }
+#credit { position: fixed; left: 8px; top: 160px; z-index: 4; font-size: 8px; line-height: 1.4; color: rgba(255, 255, 255, 0.62); text-shadow: 0 1px 0 #000; pointer-events: none; max-width: min(46%, 220px); }
+#credit a { color: inherit; pointer-events: auto; }
 button { font: 12px/1 Silkscreen, monospace; color: var(--fg); background: var(--panel); border: 2px solid var(--line); border-radius: 6px; padding: 8px 6px; min-height: 44px; min-width: 44px; cursor: pointer; }
 button:active, button.on { background: var(--accent); color: #000; border-color: var(--accent); }
 button:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
@@ -62,7 +66,8 @@ button:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
 <div id="loading">LOADING MAP...</div>
 
 <div id="top">
-  <button id="bView" aria-label="Switch view">SIDE</button>
+  <button id="bView" aria-label="Switch view">3D</button>
+  <button id="bStyle" aria-label="Switch map style">SAT</button>
   <button id="bZoom" aria-label="Zoom map">ZOOM</button>
   <button id="bWarp" aria-label="Speed up time">X1</button>
   <button id="bJump" aria-label="Jump to an airport">GO</button>
@@ -70,6 +75,7 @@ button:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
   <button id="bExit" aria-label="Back to the flight board">EXIT</button>
 </div>
 
+<div id="credit"></div>
 <div id="deck">
   <div class="pad turn">
     <button data-hold="left" aria-label="Turn left">&#9664;</button>
@@ -120,13 +126,13 @@ var buf = document.createElement("canvas"), b = buf.getContext("2d");
 var BW = 0, BH = 0, SCALE = 1;
 function resize() {
   var w = innerWidth, h = innerHeight, dpr = Math.min(window.devicePixelRatio || 1, 2);
-  SCALE = Math.min(w, h) / 200;               // the short side of the screen is 200 game pixels
+  SCALE = Math.min(w, h) / 224;               // the short side of the screen is 224 game pixels, like a Super NES
   BW = Math.ceil(w / SCALE); BH = Math.ceil(h / SCALE);
   buf.width = BW; buf.height = BH;
   cv.width = Math.round(w * dpr); cv.height = Math.round(h * dpr);
-  img = b.createImageData(BW, BH);
+  img = b.createImageData(BW, BH); px32 = new Uint32Array(img.data.buffer);
 }
-var img = null;
+var img = null, px32 = null;
 
 var clamp = function (v, a, c) { return v < a ? a : v > c ? c : v; };
 var DEG = Math.PI / 180;
@@ -271,6 +277,68 @@ var AIRPORTS = [
   ["BOS", "BOSTON", 42.366, -71.010, "BOSTON MA", 5]
 ];
 
+/* ================= map tiles =================
+   Satellite photos (USGS National Map, public domain), streets (OpenStreetMap, credit required, map
+   view only) and ground height (AWS Terrain Tiles from Mapzen). Each tile is stored small: colors cut
+   to 15-bit like a Super NES, heights as whole meters. Missing detail falls back to a coarser tile. */
+var SRC = [
+  { id: "sat", max: 15, url: function (z, x, y) { return "https://basemap.nationalmap.gov/arcgis/rest/services/USGSImageryOnly/MapServer/tile/" + z + "/" + y + "/" + x; } },
+  { id: "osm", max: 16, url: function (z, x, y) { return "https://tile.openstreetmap.org/" + z + "/" + x + "/" + y + ".png"; } },
+  { id: "dem", max: 12, url: function (z, x, y) { return "https://s3.amazonaws.com/elevation-tiles-prod/terrarium/" + z + "/" + x + "/" + y + ".png"; } }
+];
+var S_SAT = 0, S_OSM = 1, S_DEM = 2;
+var TILES = new Map(), inflight = 0, frameNo = 0, tileCanvas = null;
+var C15 = new Uint32Array(32768);       // 15-bit color to a canvas pixel (little-endian ABGR)
+for (var c = 0; c < 32768; c++) { var r5 = c >> 10, g5 = (c >> 5) & 31, b5 = c & 31; C15[c] = 0xff000000 | (Math.round(b5 * 255 / 31) << 16) | (Math.round(g5 * 255 / 31) << 8) | Math.round(r5 * 255 / 31); }
+function to15(r, g, bb) { return ((r >> 3) << 10) | ((g >> 3) << 5) | (bb >> 3); }
+function tkey(s, z, x, y) { return ((s * 32 + z) * 4194304 + x) * 4194304 + y; }
+function tile(s, z, x, y, ask) {
+  var n = 1 << z; if (y < 0 || y >= n) return null; x = ((x % n) + n) % n;
+  var k = tkey(s, z, x, y), t = TILES.get(k);
+  if (t) { t.used = frameNo; return t.d; }
+  if (!ask || inflight >= 6) return null;
+  t = { d: null, used: frameNo }; TILES.set(k, t); inflight++;
+  var im = new Image(); im.crossOrigin = "anonymous";
+  im.onload = function () {
+    inflight--;
+    if (!tileCanvas) { tileCanvas = document.createElement("canvas"); tileCanvas.width = tileCanvas.height = 256; }
+    var x2 = tileCanvas.getContext("2d", { willReadFrequently: true }); x2.clearRect(0, 0, 256, 256); x2.drawImage(im, 0, 0, 256, 256);
+    var a; try { a = x2.getImageData(0, 0, 256, 256).data; } catch (e) { return; }
+    if (s === S_DEM) { var h = new Int16Array(65536); for (var i = 0, j = 0; i < 65536; i++, j += 4) h[i] = Math.max(-500, Math.min(9000, Math.round(a[j] * 256 + a[j + 1] + a[j + 2] / 256 - 32768))); t.d = h; }
+    else { var d = new Uint16Array(65536); for (var i2 = 0, j2 = 0; i2 < 65536; i2++, j2 += 4) d[i2] = to15(a[j2], a[j2 + 1], a[j2 + 2]); t.d = d; }
+  };
+  im.onerror = function () { inflight--; t.d = null; t.failed = true; setTimeout(function () { TILES.delete(k); }, 30000); };
+  im.src = SRC[s].url(z, x, y);
+  return null;
+}
+// keep memory small on old tablets: forget the least recently used tiles past 140
+function evictTiles() {
+  if (TILES.size < 140) return;
+  var arr = []; TILES.forEach(function (t, k) { if (t.d) arr.push([t.used, k]); });
+  arr.sort(function (a, c2) { return a[0] - c2[0]; });
+  for (var i = 0; i < arr.length - 110; i++) TILES.delete(arr[i][1]);
+}
+// value at global pixel (gx, gy) of zoom z, falling back up to 5 zoom levels coarser
+var memo = { k: -1, d: null };
+function sample(s, z, gx, gy) {
+  z = Math.min(z, SRC[s].max);
+  for (var zz = z, f = 1; zz >= Math.max(3, z - 5); zz--, f *= 2) {
+    var X = gx / f, Y = gy / f, tx = Math.floor(X / 256), ty = Math.floor(Y / 256), k = tkey(s, zz, tx, ty), d;
+    if (k === memo.k) d = memo.d; else { d = tile(s, zz, tx, ty, zz === z || zz === z - 3); if (d) { memo.k = k; memo.d = d; } }
+    if (d) return d[((Math.floor(Y) & 255) << 8) | (Math.floor(X) & 255)];
+  }
+  return -32768;
+}
+function lon2x(lo, z) { return (lo + 180) / 360 * 256 * Math.pow(2, z); }
+function lat2y(la, z) { var r = la * DEG; return (1 - Math.log(Math.tan(r) + 1 / Math.cos(r)) / Math.PI) / 2 * 256 * Math.pow(2, z); }
+function groundM(la, lo) { var z = 11, v = sample(S_DEM, z, lon2x(lo, z), lat2y(la, z)); return v === -32768 ? 0 : Math.max(0, v); }
+function prefetch() { // coarse tiles around you so there is always something to fall back to
+  [5, 8].forEach(function (z) {
+    var cx = Math.floor(lon2x(P.lon, z) / 256), cy = Math.floor(lat2y(P.lat, z) / 256);
+    for (var dy = -1; dy <= 1; dy++) for (var dx = -1; dx <= 1; dx++) { tile(S_DEM, z, cx + dx, cy + dy, true); tile(styleSrc(), z, cx + dx, cy + dy, true); }
+  });
+}
+
 /* ================= sprites =================
    Planes are drawn from simple shapes into tiny canvases, then every pixel is snapped to fully on or
    off and given a dark outline, so they stay crisp pixel art at any heading. */
@@ -385,6 +453,23 @@ var SIDE = {
     { c: L.glass, pts: [[1, -0.9], [3.6, -0.6], [2.6, -1.6], [1.4, -1.6]] }
   ]; }
 };
+// seen from behind, for the 3D chase view: wings with a little dihedral, engines under them, tall fin
+function circle(cx, cy, r) { var o = []; for (var i = 0; i < 14; i++) { var a = i / 14 * Math.PI * 2; o.push([cx + Math.cos(a) * r, cy + Math.sin(a) * r]); } return o; }
+function REAR(L) { return [
+  { c: L.wing, pts: mirror([[1.6, 0.2], [12.6, -1.1], [12.6, -0.3], [1.8, 1.6]]) },
+  { c: L.tail, pts: [[-0.55, -1.6], [0.55, -1.6], [0.35, -8.6], [-0.35, -8.6]] },
+  { c: L.tail2, pts: mirror([[0.9, -1.5], [5.8, -2.3], [5.8, -1.7], [0.9, -0.7]]) },
+  { c: L.body, pts: circle(0, 0.2, 2.35) },
+  { c: L.belly, pts: [[-2.1, 1.0], [2.1, 1.0], [1.5, 2.1], [0, 2.55], [-1.5, 2.1]] },
+  { c: L.dark, pts: circle(5.3, 2.2, 1.3) }, { c: L.dark, pts: circle(-5.3, 2.2, 1.3) },
+  { c: "#1c2030", pts: circle(5.3, 2.2, 0.62) }, { c: "#1c2030", pts: circle(-5.3, 2.2, 0.62) },
+  { c: "#ff5040", pts: circle(12.4, -0.7, 0.42) }, { c: "#40e070", pts: circle(-12.4, -0.7, 0.42) }
+]; }
+function rearSprite(bank, sc) {
+  var q = Math.round(bank / 4) * 4, key = "rear" + q + "/" + sc;
+  if (!SPR[key]) SPR[key] = renderShape(REAR(fixLivery(livery("AIRLINE", "", true))), sc, q * DEG, "#141a2e");
+  return SPR[key];
+}
 function livery(kind, code, player) {
   var h = 0; for (var i = 0; i < (code || "").length; i++) h = (h * 31 + code.charCodeAt(i)) % 360;
   var tail = player ? "#2a5bd7" : "hsl(" + h + ",70%,48%)";
@@ -427,9 +512,13 @@ function sideSprite(shape, kind, code, sc, flip, pitch, player) {
     var parts = SIDE[shape](fixLivery(livery(kind, code, player)));
     if (flip) parts = parts.map(function (p) { return { c: p.c, pts: p.pts.map(function (q) { return [-q[0], q[1]]; }) }; });
     var c = renderShape(parts, sc, (flip ? 1 : -1) * pq * 6 * DEG, "#141a2e");
-    if (shape === "jet" || shape === "heavy") { // cabin windows
-      var x = c.getContext("2d"), o = c.width / 2; x.fillStyle = "#3a4a7a";
-      for (var u = -7.5; u <= 7.5; u += 1.6) { var wx = Math.round(o + (flip ? -u : u) * sc), wy = Math.round(o - 0.9 * sc + (flip ? -1 : 1) * -u * Math.sin(pq * 6 * DEG) * sc); x.fillRect(wx, wy, 1, 1); }
+    if (shape === "jet" || shape === "heavy") { // cabin windows, with outlined doors front and back
+      var x = c.getContext("2d"), o = c.width / 2, tilt = (flip ? 1 : -1) * pq * 6 * DEG;
+      var at = function (u, v) { var uu = flip ? -u : u; return [Math.round(o + (uu * Math.cos(tilt) - v * Math.sin(tilt)) * sc), Math.round(o + (uu * Math.sin(tilt) + v * Math.cos(tilt)) * sc)]; };
+      x.fillStyle = "#3a4a7a";
+      var stepW = sc >= 1.2 ? 2 / sc : 1.6;
+      for (var u = -6.6; u <= 6.8; u += stepW) { var w = at(u, -0.75); x.fillRect(w[0], w[1], 1, sc >= 1.2 ? 2 : 1); }
+      if (sc >= 1.2) { [-8, 7.9].forEach(function (u) { var d = at(u, -0.95); x.fillStyle = "#3a4a7a"; x.fillRect(d[0] - 1, d[1] - 1, 3, 1); x.fillRect(d[0] - 1, d[1] - 1, 1, 5); x.fillRect(d[0] + 1, d[1] - 1, 1, 5); }); }
     }
     SPR[key] = c;
   }
@@ -457,7 +546,10 @@ var KIND_COL = { AIRLINE: "#7fb0ff", CARGO: "#ffb000", MIL: "#9fd36a", GOV: "#ff
 /* ================= player + traffic state ================= */
 var P = { lat: cfg.lat, lon: cfg.lon, alt: 9500, hdg: 90, spd: 260, thr: 260, vs: 0, dist: 0 };
 try { var last = JSON.parse(localStorage.getItem("standby.fly") || "null"); if (last && isFinite(last.lat)) { P.lat = last.lat; P.lon = last.lon; P.alt = last.alt; P.hdg = last.hdg; } } catch (e) {}
-var view = "map", zooms = [0.12, 0.45, 1.6, 4], zoomI = 2, warps = [1, 4, 16, 64], warpI = 0;
+var view = "3d", style = "sat", zooms = [0.12, 0.45, 1.6, 4, 10], zoomI = 2, warps = [1, 4, 16, 64], warpI = 0;
+try { var pref = JSON.parse(localStorage.getItem("standby.flyview") || "null"); if (pref) { view = pref.view || view; style = pref.style || style; } } catch (e) {}
+function styleSrc() { return style === "osm" ? S_OSM : S_SAT; }
+P.bank = 0; P.gnd = 0; var gndAt = 0, crashUntil = 0;
 var hold = {};
 var traffic = new Map();            // hex -> plane
 var live = false, demoMode = false, lastFetch = 0, fetchErrs = 0, tileKey = "";
@@ -526,14 +618,22 @@ var lastT = performance.now();
 function step(now) {
   var dt = Math.min(0.1, (now - lastT) / 1000); lastT = now;
   var warp = warps[warpI];
-  if (hold.left) P.hdg -= 4 * dt * 60 / 20; if (hold.right) P.hdg += 4 * dt * 60 / 20;
-  P.hdg = (P.hdg + 360) % 360;
+  // bank into turns; the turn rate follows the bank like a real plane
+  var bankTo = hold.left ? -28 : hold.right ? 28 : 0;
+  P.bank += clamp(bankTo - P.bank, -60 * dt, 60 * dt);
+  P.hdg = (P.hdg + P.bank * 0.42 * dt + 360) % 360;
   if (hold.faster) P.thr = Math.min(560, P.thr + 60 * dt); if (hold.slower) P.thr = Math.max(90, P.thr - 60 * dt);
   P.spd += clamp(P.thr - P.spd, -15 * dt, 15 * dt);
   var target = hold.up ? 2500 : hold.down ? -2500 : 0;
   P.vs += clamp(target - P.vs, -3000 * dt, 3000 * dt);
-  P.alt = clamp(P.alt + P.vs / 60 * dt * warp, 500, 45000);
-  if (P.alt <= 500 || P.alt >= 45000) P.vs = 0;
+  P.alt = clamp(P.alt + P.vs / 60 * dt * warp, 0, 45000);
+  if (P.alt >= 45000) P.vs = Math.min(0, P.vs);
+  // real ground height under you, from the elevation tiles
+  if (now - gndAt > 200) { gndAt = now; P.gnd = groundM(P.lat, P.lon) * 3.28084; }
+  if (P.alt < P.gnd + 40 && now > crashUntil) {
+    crashUntil = now + 3000; P.alt = P.gnd + 3000; P.vs = 0;
+    banner = { text: "CRASHED", sub: "BACK UP TO 3,000 FT ABOVE GROUND", until: Date.now() + 3000, col: "#ff5c3a" };
+  }
   var nm = P.spd / 3600 * dt * warp, pos = move(P.lat, P.lon, P.hdg, nm);
   P.lat = clamp(pos[0], 18, 55); P.lon = clamp(pos[1], -135, -60); P.dist += nm;
   // demo planes that wander off come back near the player
@@ -579,10 +679,13 @@ function drawMap(now) {
   var waveT = Math.floor(now / 600);
   // a border pixel is one whose state differs from the pixel to its left or above (state or Canada/Mexico)
   if (!drawMap.up || drawMap.up.length !== BW) drawMap.up = new Int16Array(BW);
-  var up = drawMap.up, showBorders = z >= 0.4;
+  var up = drawMap.up, showBorders = z >= 0.4 && style !== "osm";
+  // satellite or street tiles at the zoom whose pixels are just finer than ours
+  var src = styleSrc(), tileZ = style === "pixel" ? -1 : clamp(Math.ceil(Math.log(156543.03 * cosl * z / 1852) / Math.LN2), 3, SRC[src].max);
+  var tx0 = tileZ >= 0 ? lon2x(lon0, tileZ) : 0, tdx = tileZ >= 0 ? lon2x(lon0 + dLon, tileZ) - tx0 : 0;
   for (var y = 0; y < BH; y++) {
     var la = lat0 - y * dLat, j = Math.floor((G.lat0 - la) / G.step), row = j * G.w;
-    var inRow = j >= 0 && j < G.h, left = -1;
+    var inRow = j >= 0 && j < G.h, left = -1, gyRow = tileZ >= 0 ? lat2y(la, tileZ) : 0;
     for (var x = 0; x < BW; x++, k += 4) {
       var lo = lon0 + x * dLon, i = Math.floor((lo - G.lon0) / G.step), t = T.OCEAN, sid = -1;
       if (inRow && i >= 0 && i < G.w) { t = CELL[row + i]; sid = SID[row + i]; if (!sid) sid = t === T.FOREIGN ? 255 : -1; }
@@ -591,10 +694,10 @@ function drawMap(now) {
       var h = hash2(gx0 + x, gy0 - y), shade = h < 0.5 ? 0 : h < 0.78 ? 1 : h < 0.96 ? 2 : 3;
       if (t === T.OCEAN || t === T.LAKE) shade = h < 0.6 ? 0 : h < 0.9 ? 1 : (hash2(gx0 + x + waveT, gy0 - y) > 0.985 ? 3 : 2);
       if (t === T.FARM && z >= 1) { var fx = Math.floor((gx0 + x) / (z * 1.4)), fy = Math.floor((gy0 - y) / (z * 1.4)); shade = Math.floor(hash2(fx, fy) * 3); if (h > 0.93) shade = 3; }
-      var c = PALRGB[t][shade];
-      if (edge) { d[k] = 250; d[k + 1] = 240; d[k + 2] = 214; }
-      else { d[k] = c[0]; d[k + 1] = c[1]; d[k + 2] = c[2]; }
-      d[k + 3] = 255;
+      var v = tileZ >= 0 && (t !== T.OCEAN || style === "osm") ? sample(src, tileZ, tx0 + x * tdx, gyRow) : -32768;
+      if (edge) { d[k] = 250; d[k + 1] = 240; d[k + 2] = 214; d[k + 3] = 255; }
+      else if (v >= 0) px32[k >> 2] = C15[v];
+      else { var c = PALRGB[t][shade]; d[k] = c[0]; d[k + 1] = c[1]; d[k + 2] = c[2]; d[k + 3] = 255; }
     }
   }
   b.putImageData(img, 0, 0);
@@ -649,11 +752,124 @@ function visible(now) {
   return out.map(function (o) { var p = o.p; return { hex: p.hex, call: p.call, type: p.type, kind: p.kind, cat: p.cat, trk: p.trk, gs: p.gs, demo: p.demo, w: o.w, r: o.r }; });
 }
 
+/* ================= 3D VIEW =================
+   Voxel terrain like 90s flight games: for each step of distance, every screen column looks up the
+   real ground height (elevation tiles) and color (satellite photos), and draws whatever pokes above
+   what is already drawn in front of it. Far ground fades into the haze. */
+var FOG = null, fogKey = "", colStep = 0, slowFrames = 0;
+var PAL15 = PALRGB.map(function (p) { return p.map(function (c) { return to15(c[0], c[1], c[2]); }); });
+function fogLUT(col, light) { // 8 haze levels, each a lookup from 15-bit color to a finished pixel; light dims the ground at night
+  if (fogKey === col + light) return FOG;
+  fogKey = col + light; var h = hexRgb(col.indexOf("#") === 0 ? col : toHex(col)); FOG = [];
+  var warm = light < 1 && light > 0.6 ? 1.08 : 1;
+  for (var l = 0; l < 8; l++) {
+    var f = l / 8 * 0.92, t = new Uint32Array(32768);
+    for (var c = 0; c < 32768; c++) {
+      var r = Math.min(255, (c >> 10) * 8.226 * light * warm), g = ((c >> 5) & 31) * 8.226 * light, bl = (c & 31) * 8.226 * light / warm;
+      t[c] = 0xff000000 | (Math.round(bl + (h[2] - bl) * f) << 16) | (Math.round(g + (h[1] - g) * f) << 8) | Math.round(r + (h[0] - r) * f);
+    }
+    FOG.push(t);
+  }
+  return FOG;
+}
+var SIZE_M = { heavy: 68, jet: 38, biz: 20, prop: 10, heli: 13, fighter: 17 };
+function draw3D(now) {
+  var t0 = performance.now();
+  var sky = skyColors(), haze = sky.bands[sky.bands.length - 1], lut = fogLUT(haze, sky.stars ? 0.42 : sky.low ? 0.82 : 1);
+  var ZB = 15, cosl = Math.cos(P.lat * DEG), mpp = 156543.03 * cosl / Math.pow(2, ZB);
+  var th = P.hdg * DEG, fx = Math.sin(th), fy = -Math.cos(th), rx = Math.cos(th), ry = Math.sin(th);
+  var plX = lon2x(P.lon, ZB), plY = lat2y(P.lat, ZB), back = 260 / mpp;
+  var camX = plX - fx * back, camY = plY - fy * back, camH = (P.alt * 0.3048 + 60) / mpp;
+  var pitch = clamp(P.vs / 2500, -1, 1), hz = Math.round(BH * 0.4 + pitch * BH * 0.07), focal = BW / 2;
+  if (!colStep) colStep = BW > 300 ? 2 : 1;
+  var cols = Math.ceil(BW / colStep);
+
+  // sky: dithered bands down to the horizon, haze below it
+  var nb = sky.bands.length, bandPx = sky.bands.map(function (c) { var h = hexRgb(c); return 0xff000000 | (h[2] << 16) | (h[1] << 8) | h[0]; });
+  var hazePx = bandPx[nb - 1];
+  for (var y = 0; y < BH; y++) {
+    var bi = y >= hz ? nb - 1 : Math.min(nb - 1, Math.floor(y / Math.max(1, hz) * nb)), next = Math.min(nb - 1, bi + 1);
+    var edge = y < hz && (Math.floor((y + 3) / Math.max(1, hz) * nb) > bi);
+    var row = y * BW, cA = bandPx[bi], cB = bandPx[next];
+    for (var x = 0; x < BW; x++) px32[row + x] = edge && ((x + y) & 1) ? cB : (y >= hz ? hazePx : cA);
+  }
+  if (sky.stars) for (var s = 0; s < 90; s++) { var sx = Math.floor(((hash2(s, 1) * 360 - P.hdg + 720) % 360) / 90 * BW - BW), sy = Math.floor(hash2(s, 2) * hz * 0.9); if (sx >= 0 && sx < BW && sy >= 0) px32[sy * BW + sx] = 0xffffeee8; }
+
+  // terrain
+  var ybuf = new Int16Array(cols); for (var i = 0; i < cols; i++) ybuf[i] = BH;
+  var D = 70000 / mpp, z = 3, dz = 1, kLon = 360 / (256 * Math.pow(2, ZB)), kLat = kLon * cosl;
+  var src = style === "pixel" ? -1 : S_SAT;
+  var waveT = Math.floor(now / 500);
+  while (z < D) {
+    var lx = camX + (fx - rx) * z, ly = camY + (fy - ry) * z, sx2 = 2 * rx * z / cols, sy2 = 2 * ry * z / cols;
+    var span = 2 * z / cols, lod = span > 1 ? Math.floor(Math.log(span) / Math.LN2) : 0;
+    var cz = Math.max(4, Math.min(15, ZB - lod)), hZ = Math.min(cz, 12), cf = Math.pow(2, ZB - cz), hf = Math.pow(2, ZB - hZ);
+    var fogL = Math.max(0, Math.min(7, Math.floor((z / D - 0.25) / 0.75 * 8))), tab = lut[fogL], inv = focal / z;
+    for (var c = 0; c < cols; c++, lx += sx2, ly += sy2) {
+      var la = P.lat - (ly - plY) * kLat, lo = P.lon + (lx - plX) * kLon, t = cellAt(la, lo);
+      var hm = t === T.OCEAN ? 0 : sample(S_DEM, hZ, lx / hf, ly / hf);
+      if (hm < 0) hm = 0;
+      var ys = (camH - hm / mpp) * inv + hz;
+      if (ys >= ybuf[c]) continue;
+      var v = -32768;
+      if (t === T.OCEAN) v = PAL15[T.OCEAN][hash2(Math.floor(lx / 6) + waveT, Math.floor(ly / 6)) > 0.97 ? 3 : (hash2(Math.floor(lx / 3), Math.floor(ly / 3)) > 0.5 ? 0 : 2)];
+      else if (src >= 0) v = sample(src, cz, lx / cf, ly / cf);
+      if (v < 0) v = PAL15[t][Math.floor(hash2(Math.floor(lx / 3), Math.floor(ly / 3)) * 3)];
+      var colr = tab[v], top = ys < 0 ? 0 : Math.ceil(ys), bot = ybuf[c], x0 = c * colStep, x1 = Math.min(BW, x0 + colStep);
+      for (var yy = top; yy < bot; yy++) { var base = yy * BW; for (var q = x0; q < x1; q++) px32[base + q] = colr; }
+      ybuf[c] = top;
+    }
+    z += dz; dz = Math.max(1, z * 0.017);
+  }
+  b.putImageData(img, 0, 0);
+
+  // sun or moon, and clouds placed by compass bearing so they swing past as you turn
+  var sunB = 200, rel = ((sunB - P.hdg + 540) % 360) - 180;
+  if (Math.abs(rel) < 50) { var sxs = BW / 2 + Math.tan(rel * DEG) * focal; b.fillStyle = sky.sun ? (sky.low ? "#ffd08a" : "#fff4c0") : "#f0f0ff"; b.beginPath(); b.arc(sxs, hz - focal * 0.5, sky.sun ? 9 : 6, 0, Math.PI * 2); b.fill(); }
+  for (var k = 0; k < 26; k++) {
+    var cb = (hash2(k, 31) * 360 + now * 0.0008) % 360, cr = ((cb - P.hdg + 540) % 360) - 180;
+    if (Math.abs(cr) > 52) continue;
+    var cx = BW / 2 + Math.tan(cr * DEG) * focal, el = 2 + hash2(k, 7) * 16, cy = hz - Math.tan(el * DEG) * focal * 1.4;
+    b.fillStyle = sky.stars ? "rgba(140,150,190,0.35)" : "rgba(255,255,255," + (0.55 + hash2(k, 3) * 0.35) + ")";
+    cloudPix(cx, cy, 6 + hash2(k, 9) * 14);
+  }
+
+  // real planes, farthest first, sized by their true length at that distance
+  var list = visible(now), drawn = [];
+  for (var n = list.length - 1; n >= 0; n--) {
+    var p = list[n], gx = lon2x(p.w.lon, ZB) - camX, gy = lat2y(p.w.lat, ZB) - camY;
+    var zf = gx * fx + gy * fy, xr = gx * rx + gy * ry;
+    if (zf < 3) continue;
+    var px = BW / 2 + xr / zf * focal, py = hz + (camH - p.w.alt * 0.3048 / mpp) / zf * focal;
+    if (px < -40 || px > BW + 40 || py < -40 || py > BH + 40) continue;
+    var shape = shapeFor(p.kind, p.cat, p.type), wpx = (SIZE_M[shape] || 30) / mpp / zf * focal;
+    if (wpx < 4) { b.fillStyle = p.demo ? "#c8cde0" : KIND_COL[p.kind]; b.fillRect(Math.round(px) - 1, Math.round(py) - 1, 2, 2); }
+    else {
+      var relT = ((p.trk - P.hdg) % 360 + 360) % 360, flip = relT > 180;
+      var sp = sideSprite(shape, p.kind, p.call, 1, flip, 0, false), scl = Math.min(4, wpx / sp.width * 1.6);
+      b.drawImage(sp, Math.round(px - sp.width * scl / 2), Math.round(py - sp.height * scl / 2), Math.round(sp.width * scl), Math.round(sp.height * scl));
+    }
+    drawn.push([p, px, py]);
+  }
+  drawn.filter(function (d) { return d[0].r.d < 30; }).slice(-6).forEach(function (d) { text(d[0].call, d[1], d[2] - 12, d[0].demo ? "#9aa0b8" : KIND_COL[d[0].kind], "center"); text(fmtAlt(d[0].w.alt), d[1], d[2] + 4, "#c8cde0", "center"); });
+
+  // you, from behind, banking with the turn
+  var me = rearSprite(P.bank, BW > 300 ? 2.4 : 2), myY = hz + 0.23 * focal + Math.sin(now / 500) * 0.8;
+  b.drawImage(me, Math.round(BW / 2 - me.width / 2), Math.round(myY - me.height / 2));
+  if (P.alt > 26000) { b.fillStyle = "rgba(255,255,255,0.6)"; for (var e = 2; e < 22; e += 2) { b.fillRect(Math.round(BW / 2 - 10.6 * (BW > 300 ? 2.4 : 2)), Math.round(myY + 4 + e), 1, 1); b.fillRect(Math.round(BW / 2 + 10.6 * (BW > 300 ? 2.4 : 2)), Math.round(myY + 4 + e), 1, 1); } }
+  hud(now, list);
+
+  // older devices: draw every second or third column if frames run long
+  var ms = performance.now() - t0;
+  if (ms > 38) { if (++slowFrames > 20 && colStep < 3) { colStep++; slowFrames = 0; } } else slowFrames = Math.max(0, slowFrames - 1);
+}
+
 /* ================= SIDE VIEW =================
    A 16-bit side-scroller. The ground ahead is read from the real map along your heading, so a coast,
    a mountain range or a city really is coming up when it scrolls in. */
+var HOUR = parseFloat(new URLSearchParams(location.search).get("hour")); // ?hour=13 forces a time of day
 function skyColors() {
-  var hr = new Date().getHours() + new Date().getMinutes() / 60;
+  var hr = isFinite(HOUR) ? HOUR : new Date().getHours() + new Date().getMinutes() / 60;
   if (hr < 5.5 || hr >= 20.5) return { bands: ["#060818", "#0b1030", "#141a44", "#1e2658"], stars: true, sun: false };
   if (hr < 7.5) return { bands: ["#2a3a78", "#6a5a9a", "#d87a7a", "#f8b070"], stars: false, sun: true, low: true };
   if (hr >= 18.5) return { bands: ["#26306e", "#7a4a8a", "#e0705a", "#ffb060"], stars: false, sun: true, low: true };
@@ -684,50 +900,42 @@ function drawSide(now) {
     }
   });
 
-  // terrain under the line of flight: sample the map ahead and behind
-  var far = [], near = [];
+  // real ground along your line of flight: height from the elevation tiles, color from the photos
+  var topY = 30, altY = function (a) { return groundY - 6 - (groundY - 6 - topY) * Math.min(1, a / 46000); };
+  var hazeC = sky.bands[n - 1];
   for (var x = 0; x < BW; x++) {
-    var dNM = (x - playerX) / pxPerNM, pos = move(P.lat, P.lon, P.hdg, dNM);
-    near.push(cellAt(pos[0], pos[1]));
-    var pf = move(P.lat, P.lon, P.hdg, dNM * 2.5 + 40); far.push(cellAt(pf[0], pf[1]));
+    var dF = (x - playerX) / pxPerNM * 3 + 60, pf = move(P.lat, P.lon, P.hdg, dF), tf = cellAt(pf[0], pf[1]);
+    var ef = tf === T.OCEAN ? 0 : Math.max(0, sample(S_DEM, 9, lon2x(pf[1], 9), lat2y(pf[0], 9))) * 3.28084;
+    var yf = Math.round(altY(ef)) - 2;
+    b.fillStyle = mixHaze(PAL[tf][0], hazeC, 0.6); b.fillRect(x, yf, 1, BH - yf);
   }
-  // far ridge (hazy)
-  for (var x2 = 0; x2 < BW; x2++) {
-    var t = far[x2], wx = scroll * pxPerNM * 0.25 + x2, h0 = ridgeH(t, wx * 0.6, 0.6);
-    var col = mixHaze(PAL[t][0], sky.bands[n - 1], 0.55);
-    b.fillStyle = col; b.fillRect(x2, groundY - h0 - 6, 1, h0 + 6);
-  }
-  // near terrain with detail
   for (var x3 = 0; x3 < BW; x3++) {
-    var t3 = near[x3], wx3 = Math.floor(scroll * pxPerNM + x3), h3 = ridgeH(t3, wx3, 1), top = groundY - h3;
-    var p = PAL[t3];
-    if (t3 === T.RED) { // mesas with strata
-      for (var yy3 = top; yy3 < BH; yy3++) { var band = Math.floor((yy3 - top + hash2(wx3 >> 3, 9) * 3) / 3) % 3; b.fillStyle = p[band]; b.fillRect(x3, yy3, 1, 1); }
-      b.fillStyle = "#efe0c4"; b.fillRect(x3, top, 1, 1);
-    } else if (t3 === T.MTN || t3 === T.SNOW) {
-      b.fillStyle = p[0]; b.fillRect(x3, top, 1, BH - top);
-      if (h3 > 34) { b.fillStyle = "#eef2f8"; b.fillRect(x3, top, 1, Math.min(8, h3 - 34)); }
-      if (hash2(wx3, 3) > 0.7) { b.fillStyle = p[2]; b.fillRect(x3, top + 3, 1, h3 / 2); }
-    } else if (t3 === T.OCEAN || t3 === T.LAKE) {
-      b.fillStyle = p[0]; b.fillRect(x3, groundY, 1, BH - groundY);
-      b.fillStyle = p[2]; if (((wx3 + Math.floor(now / 200)) % 9) < 2) b.fillRect(x3, groundY, 1, 1);
-      if (hash2(wx3, Math.floor(now / 500)) > 0.97) { b.fillStyle = "#ffffff"; b.fillRect(x3, groundY + 3 + Math.floor(hash2(wx3, 2) * 20), 1, 1); }
-    } else if (t3 === T.CITY) {
-      var bw = 4 + Math.floor(hash2(wx3 >> 3, 4) * 3), bh = 8 + Math.floor(hash2(wx3 >> 3, 6) * 26);
-      b.fillStyle = "#4a4e66"; b.fillRect(x3, groundY - bh, 1, bh);
-      if ((wx3 % bw) === 0) { b.fillStyle = "#2c3048"; b.fillRect(x3, groundY - bh, 1, bh); }
-      if (((wx3 % 3) === 1) && sky.stars) { b.fillStyle = "#ffe08a"; for (var wy = groundY - bh + 3; wy < groundY - 2; wy += 4) if (hash2(wx3, wy) > 0.4) b.fillRect(x3, wy, 1, 1); }
-      b.fillStyle = p[2]; b.fillRect(x3, groundY, 1, BH - groundY);
-    } else {
-      b.fillStyle = p[0]; b.fillRect(x3, top, 1, BH - top);
-      if (t3 === T.FOREST || t3 === T.PNW || t3 === T.HILLS) { b.fillStyle = p[2]; if (hash2(wx3, 1) > 0.5) b.fillRect(x3, top, 1, 2); }
-      if (t3 === T.FARM) { b.fillStyle = p[(wx3 >> 4) % 3]; b.fillRect(x3, groundY + 4, 1, BH - groundY - 4); }
-      if (t3 === T.TAN && hash2(wx3, 4) > 0.93) { b.fillStyle = "#4f7a4a"; b.fillRect(x3, top - 2, 1, 2); }
+    var dNM = (x3 - playerX) / pxPerNM, pos = move(P.lat, P.lon, P.hdg, dNM), t3 = cellAt(pos[0], pos[1]);
+    var wx3 = Math.floor(scroll * pxPerNM + x3);
+    var em = t3 === T.OCEAN ? 0 : Math.max(0, sample(S_DEM, 11, lon2x(pos[1], 11), lat2y(pos[0], 11)));
+    var top = Math.round(altY(em * 3.28084));
+    var v = style !== "pixel" && t3 !== T.OCEAN ? sample(S_SAT, 8, lon2x(pos[1], 8), lat2y(pos[0], 8)) : -32768;
+    var p3 = PAL[t3], lit = sky.stars ? 0.5 : 1;
+    var slope = clamp((em - (drawSide.prev || em)) / 40, -0.25, 0.25); drawSide.prev = em;
+    var k3 = lit * (1 + slope), rgb3 = v >= 0 ? [(v >> 10) * 8.2, ((v >> 5) & 31) * 8.2, (v & 31) * 8.2] : PALRGB[t3][0];
+    var base = "rgb(" + Math.round(Math.min(255, rgb3[0] * k3)) + "," + Math.round(Math.min(255, rgb3[1] * k3)) + "," + Math.round(Math.min(255, rgb3[2] * k3)) + ")";
+    if (t3 === T.OCEAN || t3 === T.LAKE) {
+      b.fillStyle = p3[0]; b.fillRect(x3, top, 1, BH - top);
+      b.fillStyle = p3[2]; if (((wx3 + Math.floor(now / 200)) % 9) < 2) b.fillRect(x3, top, 1, 1);
+      continue;
+    }
+    b.fillStyle = base; b.fillRect(x3, top, 1, BH - top);
+    if (t3 === T.RED) { b.fillStyle = "rgba(120,40,20,0.35)"; for (var yy3 = top + 2; yy3 < BH; yy3 += 4) b.fillRect(x3, yy3, 1, 1); }
+    b.fillStyle = "rgba(0,0,0,0.25)"; b.fillRect(x3, top + 6, 1, BH - top - 6);
+    b.fillStyle = "rgba(255,255,255,0.35)"; b.fillRect(x3, top, 1, 1);
+    if (t3 === T.CITY) {
+      var bh = 6 + Math.floor(hash2(wx3 >> 3, 6) * 22);
+      b.fillStyle = (wx3 % 5) === 0 ? "#2c3048" : "#4a4e66"; b.fillRect(x3, top - bh, 1, bh);
+      if (((wx3 % 3) === 1) && sky.stars) { b.fillStyle = "#ffe08a"; for (var wy = top - bh + 3; wy < top - 2; wy += 4) if (hash2(wx3, wy) > 0.4) b.fillRect(x3, wy, 1, 1); }
     }
   }
 
   // altitude scale: 0 to 46,000 ft between the ground and the top
-  var topY = 30, altY = function (a) { return groundY - 6 - (groundY - 6 - topY) * Math.min(1, a / 46000); };
   b.fillStyle = "rgba(255,255,255,0.25)";
   [10000, 20000, 30000, 40000].forEach(function (a) { var yy = Math.round(altY(a)); for (var x = 0; x < 10; x += 2) b.fillRect(x, yy, 1, 1); text(a / 1000 + "K", 3, yy - 9, "rgba(255,255,255,0.55)"); });
 
@@ -760,17 +968,6 @@ function drawSide(now) {
   hud(now, list);
 }
 function cloudPix(x, y, r) { x = Math.round(x); y = Math.round(y); b.fillRect(x - r, y, r * 2, 3); b.fillRect(x - r + 2, y - 2, r * 2 - 4, 2); b.fillRect(x - r / 2, y - 4, r, 2); b.fillRect(x - r + 3, y + 3, r * 2 - 6, 1); }
-function ridgeH(t, wx, s) {
-  var n = fbm(wx * 0.02, 1.7);
-  if (t === T.OCEAN || t === T.LAKE) return 0;
-  if (t === T.MTN || t === T.SNOW) return Math.round((18 + n * 34 + vnoise(wx * 0.09, 4) * 8) * s);
-  if (t === T.RED) return Math.round((Math.floor(n * 5) * 7 + 4) * s);        // stepped mesas
-  if (t === T.HILLS || t === T.PNW) return Math.round((8 + n * 16) * s);
-  if (t === T.FOREST) return Math.round((5 + n * 8 + (hash2(wx >> 1, 3) > 0.6 ? 2 : 0)) * s);
-  if (t === T.TAN || t === T.CHAP) return Math.round((3 + n * 7) * s);
-  if (t === T.CITY) return 2;
-  return Math.round((2 + n * 4) * s);
-}
 function mixHaze(a, c, f) { var x = hexRgb(a), y = hexRgb(c); return "rgb(" + Math.round(x[0] + (y[0] - x[0]) * f) + "," + Math.round(x[1] + (y[1] - x[1]) * f) + "," + Math.round(x[2] + (y[2] - x[2]) * f) + ")"; }
 
 /* ================= HUD ================= */
@@ -780,14 +977,18 @@ function hud(now, list) {
   text("HDG " + String(Math.round(P.hdg)).padStart(3, "0") + " " + dirName(P.hdg), 8, hy + 3, "#ffe08a");
   text("SPD " + Math.round(P.spd) + "KT", 8, hy + 12, "#ffffff");
   text("ALT " + fmtAlt(P.alt), 8, hy + 21, "#ffffff");
-  var vs = Math.round(P.vs / 100) * 100;
+  var vs = Math.round(P.vs / 100) * 100, agl = Math.max(0, Math.round((P.alt - P.gnd) / 100) * 100);
   text((vs > 0 ? "+" : "") + vs + " FPM", 8, hy + 30, vs > 0 ? "#9fd36a" : vs < 0 ? "#ff9a7a" : "#9aa0b8");
+  text(agl.toLocaleString("en-US") + " AGL", 92, hy + 30, agl < 1000 ? "#ff5c3a" : "#9aa0b8", "right");
+  if (agl < 1000 && P.vs < -200 && Math.floor(now / 300) % 2) { box(BW / 2 - 34, BH * 0.18, 68, 14); text("PULL UP", BW / 2, BH * 0.18 + 3, "#ff5c3a", "center"); }
   var ap = nearestAirport();
   var place = ap[1] < 25 ? "OVER " + ap[2][1] : ap[0] + " " + Math.round(ap[1]) + "NM " + dirName(bearingTo(ap[2][2], ap[2][3]));
   var real = list.filter(function (p) { return !p.demo; }).length;
   var status = demoMode ? "DEMO TRAFFIC" : live ? real + " REAL PLANES" : "LOADING TRAFFIC";
   var y2 = hy + 46, x2 = 4;
   box(x2, y2, Math.max(92, b.measureText(place).width + 10), 24);
+  var cr = document.getElementById("credit"), crTop = Math.round((y2 + 28 + (warps[warpI] > 1 ? 10 : 0)) * SCALE) + "px";
+  if (cr.style.top !== crTop) cr.style.top = crTop;
   text(place, x2 + 4, y2 + 3, "#ffffff");
   text(status, x2 + 4, y2 + 12, demoMode ? "#ff9a7a" : "#9fd36a");
   if (warps[warpI] > 1) text("TIME X" + warps[warpI], x2 + 4, y2 + 26, "#ffb000");
@@ -806,7 +1007,9 @@ function deckH() { return Math.round(document.getElementById("deck").offsetHeigh
 /* ================= loop ================= */
 function frame(now) {
   step(now);
-  if (CELL) { if (view === "map") drawMap(Date.now()); else drawSide(Date.now()); }
+  frameNo++;
+  if (CELL) { if (view === "map") drawMap(Date.now()); else if (view === "side") drawSide(Date.now()); else draw3D(Date.now()); }
+  if ((frameNo & 63) === 0) evictTiles();
   ctx.imageSmoothingEnabled = false;
   ctx.drawImage(buf, 0, 0, BW * SCALE * (cv.width / innerWidth), BH * SCALE * (cv.height / innerHeight));
   if (Date.now() - lastFetch > 60000 || (Math.round(P.lat) + "," + Math.round(P.lon)) !== tileKey && Date.now() - lastFetch > 8000) { fetchTraffic(); prune(); }
@@ -825,14 +1028,28 @@ document.querySelectorAll("[data-hold]").forEach(bindHold);
 var KEYS = { ArrowLeft: "left", a: "left", ArrowRight: "right", d: "right", ArrowUp: "up", w: "up", ArrowDown: "down", s: "down", e: "faster", q: "slower" };
 addEventListener("keydown", function (e) {
   if (KEYS[e.key]) { hold[KEYS[e.key]] = true; e.preventDefault(); }
-  if (e.key === "v") toggleView(); if (e.key === "z") cycleZoom(); if (e.key === "t") cycleWarp();
+  if (e.key === "v") toggleView(); if (e.key === "z") cycleZoom(); if (e.key === "t") cycleWarp(); if (e.key === "m") cycleStyle();
 });
 addEventListener("keyup", function (e) { if (KEYS[e.key]) hold[KEYS[e.key]] = false; });
 var $ = function (id) { return document.getElementById(id); };
-function toggleView() { view = view === "map" ? "side" : "map"; $("bView").textContent = view === "map" ? "SIDE" : "MAP"; $("bZoom").hidden = view !== "map"; }
+var VIEWS = ["3d", "map", "side"], STYLES = ["sat", "osm", "pixel"], STYLE_NAME = { sat: "SAT", osm: "STREET", pixel: "PIXEL" };
+function savePrefs() { try { localStorage.setItem("standby.flyview", JSON.stringify({ view: view, style: style })); } catch (e) {} }
+function syncButtons() {
+  $("bView").textContent = view === "3d" ? "3D" : view === "map" ? "MAP" : "SIDE";
+  $("bStyle").textContent = STYLE_NAME[style];
+  $("bZoom").hidden = view !== "map";
+  // street tiles are for the map view only, to stay within OpenStreetMap's tile policy
+  var shown = style === "osm" && view !== "map" ? "sat" : style;
+  $("credit").innerHTML = shown === "osm" ? 'Map &copy; <a href="https://www.openstreetmap.org/copyright" target="_blank" rel="noopener">OpenStreetMap</a> contributors'
+    : shown === "sat" ? "Imagery USGS National Map. Elevation Mapzen Terrain Tiles (USGS and others). Planes adsb.lol and friends."
+    : "Elevation Mapzen Terrain Tiles. Planes adsb.lol and friends.";
+}
+function toggleView() { view = VIEWS[(VIEWS.indexOf(view) + 1) % VIEWS.length]; syncButtons(); savePrefs(); }
+function cycleStyle() { style = STYLES[(STYLES.indexOf(style) + 1) % STYLES.length]; syncButtons(); savePrefs(); prefetch(); }
 function cycleZoom() { zoomI = (zoomI + 1) % zooms.length; }
 function cycleWarp() { warpI = (warpI + 1) % warps.length; $("bWarp").textContent = "X" + warps[warpI]; }
 $("bView").addEventListener("click", toggleView);
+$("bStyle").addEventListener("click", cycleStyle);
 $("bZoom").addEventListener("click", cycleZoom);
 $("bWarp").addEventListener("click", cycleWarp);
 $("bAuto").addEventListener("click", function () { P.vs = 0; hold.up = hold.down = false; });
@@ -861,12 +1078,12 @@ $("bJumpClose").addEventListener("click", function () { $("jumpSheet").hidden = 
 function jump(la, lo) {
   P.lat = la; P.lon = lo; P.alt = Math.max(P.alt, 6000); $("jumpSheet").hidden = true;
   if (demoMode) { endDemo(); demoMode = false; startDemo(); }
-  lastFetch = 0;
+  lastFetch = 0; prefetch();
 }
 
 /* ================= boot ================= */
 resize(); addEventListener("resize", resize);
-toggleView(); toggleView();
+syncButtons();
 var fontsReady = document.fonts && document.fonts.load ? document.fonts.load("8px Silkscreen").catch(function () {}) : Promise.resolve();
 Promise.all([
   fetch("https://cdn.jsdelivr.net/npm/world-atlas@2.0.2/land-50m.json").then(function (r) { return r.json(); }),
@@ -880,7 +1097,7 @@ Promise.all([
 }).catch(function (e) {
   $("loading").textContent = "THE MAP DID NOT LOAD. CHECK THE CONNECTION AND RELOAD.";
 });
-fetchTraffic();
+fetchTraffic(); prefetch();
 requestAnimationFrame(frame);
 })();
 </script>
