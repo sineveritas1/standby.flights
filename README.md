@@ -12,7 +12,7 @@ No framework, no build step, no dependencies.
 ```
 public/index.html          The whole app: HTML, CSS and JS in one file
 public/check.html          One-tap test of which sources a device can reach directly
-public/fly.html            Fly mode: 16-bit flight game over a pixel-art US with the real planes around you
+public/live.html           Live tracker: satellite or street map, 3D follow camera, sky view and altitude cross-section
 functions/_lib/relay.js    Shared server code: aircraft relay and route lookup (_lib is not routed)
 functions/api/planes.js    GET /api/planes?lat=&lon=&r=        nearby aircraft
 functions/api/route.js     GET /api/route?callsign=&lat=&lon=  origin and destination
@@ -23,17 +23,17 @@ docs/HANDOFF.md            Original design handoff: skins, data flow, provider n
 
 The page polls `/api/planes` every 8 seconds. The relay asks adsb.lol, adsb.fi, airplanes.live and OpenSky at once and merges them by aircraft ID so no plane shows twice. From Cloudflare only adsb.lol answers today; an optional home relay (docs/HOME_RELAY.md) runs the same code from a home connection, where the other sources work. Emails asking the networks for access are in docs/SOURCE_ACCESS.md. Routes come from adsbdb, with the adsb.lol routeset as backup, cached 6 hours. If no source answers for a minute the page shows clearly labeled DEMO TRAFFIC and keeps retrying.
 
-## Fly mode
+## Live tracker
 
-The Fly button opens `/fly`, a 16/32-bit style flight game over the real US with the real planes around you. Three views:
+The Live button on the board opens `/live`, a live flight tracker in the same retro style, drawn in 15-bit color.
 
-- **3D:** voxel terrain like 90s flight games. Ground height from Mapzen Terrain Tiles on AWS (open data), colors from USGS National Map imagery (public domain), drawn in 15-bit color with distance haze, day and night lighting, and your plane from behind, banking into turns.
-- **Map:** top-down, with satellite (USGS), street (OpenStreetMap, credited on screen, map view only) or the pixel-art map built from world-atlas and us-atlas.
-- **Side:** a side-scroller whose ground is the real elevation profile along your heading.
+- **Map:** centered on your spot, with satellite (USGS National Map, public domain), street (OpenStreetMap, credited on screen, map view only) or pixel map styles. Every flight shows its recent trail. Drag to pan, pinch or use + and - to zoom.
+- **Flight card:** tap a plane for callsign, type (airline, cargo, military, government, biz jet, private, helicopter), airline and route (from adsbdb), aircraft, registration, squawk, altitude, speed, climb, heading and distance from you.
+- **3D:** follow the selected flight with a chase camera over real terrain (heights from Mapzen Terrain Tiles on AWS, colors from USGS imagery). With nothing selected it shows the sky over your spot. Drag to turn the camera.
+- **Side:** an altitude cross-section through the selected flight or your spot, over the real ground profile.
+- **List:** flights near you sorted by distance. **Auto:** follows the nearest flights in turn, every 40 seconds, for a tablet on the wall. A kiosk link can start it with `?auto=1` (and `&view=3d`).
 
-Real planes from `/api/planes` fly around you, sorted into airline, cargo, military, government, bizjet, private and helicopter. Fly within about 3 miles and 3,000 feet of one to log it. Demo traffic fills in when no source answers and is never logged. Height above ground is real: PULL UP warns you, and hitting the ground resets you 3,000 ft up. The logbook, last position and chosen view are saved in this browser only.
-
-Controls: arrows turn and climb, THR+ and THR- set speed, LVL levels off, 3D/MAP/SIDE switches view, SAT/STREET/PIXEL switches map style, ZOOM (map view) steps from the whole US to close in, X1 speeds up your plane only, GO jumps to an airport. Keyboard: arrow keys or WASD, Q and E for throttle, V view, M map style, Z zoom, T time. Add `?hour=13` to the address to force a time of day.
+Demo traffic fills in, clearly labeled, only when no flight source answers. View, map style and zoom are remembered in this browser. Keyboard: V view, M map style, + and - zoom, L list, A auto, Esc closes. Add `?hour=13` to force a time of day.
 
 ## Run locally
 

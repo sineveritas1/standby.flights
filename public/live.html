@@ -6,15 +6,15 @@
 <meta name="apple-mobile-web-app-capable" content="yes">
 <meta name="mobile-web-app-capable" content="yes">
 <meta name="theme-color" content="#000000">
-<title>standby.flights fly</title>
-<meta name="description" content="Fly over the real US in a 16-bit style flight game with the real planes around you.">
+<title>standby.flights live</title>
+<meta name="description" content="Live flights over the real US: satellite map, 3D follow camera and the sky over your spot, in 16-bit style.">
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Silkscreen&display=swap">
 <script src="https://cdn.jsdelivr.net/npm/topojson-client@3.1.0/dist/topojson-client.min.js"></script>
 <style>
-/* standby.flights FLY: a 16/32-bit style flight game over the real US with the real planes around you.
-   Everything is drawn into a low-res buffer in 15-bit color and scaled up without smoothing. */
+/* standby.flights LIVE: a live flight tracker over the real US. Map, 3D follow camera, sky view and an
+   altitude cross-section, drawn into a low-res buffer in 15-bit color and scaled up without smoothing. */
 :root {
   --ink: #0b0d18; --panel: rgba(12, 14, 28, 0.86); --line: rgba(255, 255, 255, 0.16);
   --fg: #f2ecdc; --dim: #9aa0b8; --accent: #ffb000; --hot: #ff5c3a;
@@ -35,18 +35,35 @@ button { font: 12px/1 Silkscreen, monospace; color: var(--fg); background: var(-
 button:active, button.on { background: var(--accent); color: #000; border-color: var(--accent); }
 button:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
 
-/* control deck */
-#deck { position: fixed; left: 0; right: 0; bottom: 0; z-index: 5; display: flex; justify-content: space-between; align-items: flex-end; gap: 8px;
-  padding: 8px max(8px, env(safe-area-inset-right, 0px)) max(8px, env(safe-area-inset-bottom, 0px)) max(8px, env(safe-area-inset-left, 0px)); pointer-events: none; }
-.pad { display: grid; gap: 6px; pointer-events: auto; }
-.pad.turn { grid-template-columns: 64px 64px; }
-.pad.pitch { grid-template-rows: 56px 56px; }
-.pad.thr { grid-template-columns: 52px; grid-template-rows: 44px 44px 44px; }
-.pad button { font-size: 20px; min-height: 56px; background: rgba(12, 14, 28, 0.62); }
-.pad.thr button { font-size: 13px; min-height: 44px; }
-.mid { display: flex; gap: 8px; align-items: flex-end; pointer-events: none; }
+/* zoom buttons */
+#zoom { position: fixed; right: max(8px, env(safe-area-inset-right, 0px)); bottom: calc(max(8px, env(safe-area-inset-bottom, 0px)) + var(--cardh, 0px)); z-index: 5; display: grid; gap: 6px; }
+#zoom button { font-size: 20px; width: 48px; }
 
-/* sheets: logbook + jump */
+/* flight card */
+#card { position: fixed; left: 50%; transform: translateX(-50%); bottom: max(8px, env(safe-area-inset-bottom, 0px)); width: min(520px, calc(100% - 16px)); z-index: 6;
+  background: rgba(12, 14, 28, 0.9); border: 2px solid var(--line); border-radius: 8px; padding: 10px 12px; }
+.ch { display: flex; align-items: center; gap: 8px; }
+#cCall { font-weight: 400; font-size: 20px; letter-spacing: 0.04em; flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+#cKind { font-size: 10px; padding: 3px 6px; border-radius: 4px; background: #000; border: 1px solid currentColor; white-space: nowrap; }
+#cClose { min-width: 44px; }
+#cRoute { font-size: 13px; color: var(--accent); margin: 6px 0 2px; overflow-wrap: anywhere; }
+#cType { font-size: 11px; color: var(--dim); margin-bottom: 8px; overflow-wrap: anywhere; }
+.stats { display: grid; grid-template-columns: repeat(auto-fit, minmax(84px, 1fr)); gap: 6px; margin-bottom: 8px; }
+.stats div { background: #0b0d18; border: 1px solid var(--line); border-radius: 4px; padding: 6px; }
+.stats i { display: block; font-style: normal; font-size: 9px; color: var(--dim); margin-bottom: 3px; }
+.stats span { font-size: 13px; }
+.row2 { display: flex; gap: 6px; }
+.row2 button { flex: 1; }
+/* held sideways: the card becomes a side panel so the view stays visible */
+@media (orientation: landscape) and (max-height: 600px) {
+  #card { left: auto; right: max(8px, env(safe-area-inset-right, 0px)); transform: none; top: 64px; bottom: auto; width: min(300px, 42%); max-height: calc(100% - 72px); overflow: auto; padding: 8px 10px; }
+  #cCall { font-size: 16px; }
+  .stats { grid-template-columns: 1fr 1fr; }
+  .row2 { flex-direction: column; }
+  #zoom { right: auto; left: max(8px, env(safe-area-inset-left, 0px)); bottom: max(8px, env(safe-area-inset-bottom, 0px)); }
+}
+
+/* sheets: flight list */
 .sheet { position: fixed; inset: 0; z-index: 10; background: rgba(0, 0, 0, 0.72); display: grid; place-items: center; padding: 16px; }
 .card { width: min(460px, 100%); max-height: 100%; overflow: auto; background: #151830; border: 2px solid var(--line); border-radius: 8px; padding: 16px; }
 .card h2 { margin: 0 0 6px; font-size: 18px; color: var(--accent); font-weight: 400; }
@@ -66,50 +83,33 @@ button:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
 <div id="loading">LOADING MAP...</div>
 
 <div id="top">
-  <button id="bView" aria-label="Switch view">3D</button>
+  <button id="bView" aria-label="Switch view">MAP</button>
   <button id="bStyle" aria-label="Switch map style">SAT</button>
-  <button id="bZoom" aria-label="Zoom map">ZOOM</button>
-  <button id="bWarp" aria-label="Speed up time">X1</button>
-  <button id="bJump" aria-label="Jump to an airport">GO</button>
-  <button id="bLog" aria-label="Logbook">LOG</button>
-  <button id="bExit" aria-label="Back to the flight board">EXIT</button>
+  <button id="bList" aria-label="List of flights">LIST</button>
+  <button id="bAuto" aria-label="Follow nearby flights automatically">AUTO</button>
+  <button id="bHome" aria-label="Back to your spot">HOME</button>
+  <button id="bExit" aria-label="Back to the flight board">BOARD</button>
 </div>
-
 <div id="credit"></div>
-<div id="deck">
-  <div class="pad turn">
-    <button data-hold="left" aria-label="Turn left">&#9664;</button>
-    <button data-hold="right" aria-label="Turn right">&#9654;</button>
+<div id="zoom"><button id="bIn" aria-label="Zoom in">+</button><button id="bOut" aria-label="Zoom out">-</button></div>
+
+<div id="card" hidden aria-live="polite">
+  <div class="ch"><span id="cKind"></span><b id="cCall"></b><button id="cClose" aria-label="Close flight card">X</button></div>
+  <div id="cRoute"></div>
+  <div id="cType"></div>
+  <div class="stats">
+    <div><i>ALTITUDE</i><span id="sAlt"></span></div><div><i>SPEED</i><span id="sSpd"></span></div>
+    <div><i>CLIMB</i><span id="sVs"></span></div><div><i>HEADING</i><span id="sHdg"></span></div><div><i>FROM YOU</i><span id="sDist"></span></div>
   </div>
-  <div class="mid">
-    <div class="pad pitch">
-      <button data-hold="up" aria-label="Climb">&#9650;</button>
-      <button data-hold="down" aria-label="Descend">&#9660;</button>
-    </div>
-    <div class="pad thr">
-      <button data-hold="faster" aria-label="More throttle">THR+</button>
-      <button id="bAuto" aria-label="Level off">LVL</button>
-      <button data-hold="slower" aria-label="Less throttle">THR-</button>
-    </div>
-  </div>
+  <div class="row2"><button id="cFollow">FOLLOW IN 3D</button><button id="cMap">MAP</button></div>
 </div>
 
-<div id="logSheet" class="sheet" hidden>
-  <div class="card" role="dialog" aria-labelledby="logTitle">
-    <h2 id="logTitle">Spotter logbook</h2>
-    <p>Fly within 3 miles and 3,000 feet of a real plane to log it. Demo traffic never counts.</p>
-    <div class="tally" id="tally"></div>
-    <div id="entries"></div>
-    <div class="list"><button id="bLogClose">Close</button></div>
-  </div>
-</div>
-
-<div id="jumpSheet" class="sheet" hidden>
-  <div class="card" role="dialog" aria-labelledby="jumpTitle">
-    <h2 id="jumpTitle">Fly from</h2>
-    <p>Jump to an airport. Real traffic loads around wherever you are.</p>
-    <div class="list" id="jumps"></div>
-    <div class="list"><button id="bJumpClose">Close</button></div>
+<div id="listSheet" class="sheet" hidden>
+  <div class="card" role="dialog" aria-labelledby="listTitle">
+    <h2 id="listTitle">Flights near you</h2>
+    <p id="listNote"></p>
+    <div class="list" id="flights"></div>
+    <div class="list"><button id="bListClose">Close</button></div>
   </div>
 </div>
 
@@ -465,9 +465,9 @@ function REAR(L) { return [
   { c: "#1c2030", pts: circle(5.3, 2.2, 0.62) }, { c: "#1c2030", pts: circle(-5.3, 2.2, 0.62) },
   { c: "#ff5040", pts: circle(12.4, -0.7, 0.42) }, { c: "#40e070", pts: circle(-12.4, -0.7, 0.42) }
 ]; }
-function rearSprite(bank, sc) {
-  var q = Math.round(bank / 4) * 4, key = "rear" + q + "/" + sc;
-  if (!SPR[key]) SPR[key] = renderShape(REAR(fixLivery(livery("AIRLINE", "", true))), sc, q * DEG, "#141a2e");
+function rearSprite(kind, code, sc) {
+  var key = "rear" + kind + (code || "").slice(0, 3) + "/" + sc;
+  if (!SPR[key]) SPR[key] = renderShape(REAR(fixLivery(livery(kind, code, false))), sc, 0, "#141a2e");
   return SPR[key];
 }
 function livery(kind, code, player) {
@@ -543,26 +543,33 @@ function kindOf(a) {
 }
 var KIND_COL = { AIRLINE: "#7fb0ff", CARGO: "#ffb000", MIL: "#9fd36a", GOV: "#ff7a5c", BIZJET: "#c79bff", PRIVATE: "#f2ecdc", HELI: "#5fe0d0" };
 
-/* ================= player + traffic state ================= */
-var P = { lat: cfg.lat, lon: cfg.lon, alt: 9500, hdg: 90, spd: 260, thr: 260, vs: 0, dist: 0 };
-try { var last = JSON.parse(localStorage.getItem("standby.fly") || "null"); if (last && isFinite(last.lat)) { P.lat = last.lat; P.lon = last.lon; P.alt = last.alt; P.hdg = last.hdg; } } catch (e) {}
-var view = "3d", style = "sat", zooms = [0.12, 0.45, 1.6, 4, 10], zoomI = 2, warps = [1, 4, 16, 64], warpI = 0;
-try { var pref = JSON.parse(localStorage.getItem("standby.flyview") || "null"); if (pref) { view = pref.view || view; style = pref.style || style; } } catch (e) {}
+/* ================= tracker state ================= */
+var HOME = { lat: cfg.lat, lon: cfg.lon, name: cfg.name };
+// P is where the camera looks: the map center, the flight being followed, or your spot for the sky view
+var P = { lat: HOME.lat, lon: HOME.lon, alt: 0, hdg: 90, vs: 0, gnd: 0, dist: 0 };
+var Q = new URLSearchParams(location.search);
+var view = "map", style = "sat", ZM = 1.2;
+try { var pref = JSON.parse(localStorage.getItem("standby.liveview") || "null"); if (pref) { view = pref.view || view; style = pref.style || style; ZM = +pref.zm || ZM; } } catch (e) {}
+if (/^(map|3d|side)$/.test(Q.get("view") || "")) view = Q.get("view");
 function styleSrc() { return style === "osm" ? S_OSM : S_SAT; }
-P.bank = 0; P.gnd = 0; var gndAt = 0, crashUntil = 0;
-var hold = {};
-var traffic = new Map();            // hex -> plane
-var live = false, demoMode = false, lastFetch = 0, fetchErrs = 0, tileKey = "";
-var spotted = {}; try { spotted = JSON.parse(localStorage.getItem("standby.spotted") || "{}") || {}; } catch (e) {}
-var banner = null;
+var sel = null, follow = false, auto = Q.get("auto") === "1", autoAt = 0, orbit = 0, skyHdg = 90;
+var traffic = new Map();            // hex -> plane, with a short trail of past positions
+var live = false, demoMode = false, fetchErrs = 0, busy = false, FETCHED = {}, lastSource = "";
+var ROUTES = new Map(), TAPS = [], gndAt = 0;
 
 function nmTo(la, lo) { var dy = (la - P.lat) * 60, dx = (lo - P.lon) * 60 * Math.cos(P.lat * DEG); return { dx: dx, dy: dy, d: Math.hypot(dx, dy) }; }
+function nmHome(la, lo) { var dy = (la - HOME.lat) * 60, dx = (lo - HOME.lon) * 60 * Math.cos(HOME.lat * DEG); return { dx: dx, dy: dy, d: Math.hypot(dx, dy), brg: (Math.atan2(dx, dy) / DEG + 360) % 360 }; }
 function move(la, lo, hdg, nm) { var t = hdg * DEG; la += nm * Math.cos(t) / 60; lo += nm * Math.sin(t) / (60 * Math.cos(la * DEG)); return [la, lo]; }
 
-async function fetchTraffic() {
-  // A 1 degree grid with a 100 NM radius: the relay caches each square, so flying around stays polite
-  var la = Math.round(P.lat), lo = Math.round(P.lon), key = la + "," + lo;
-  lastFetch = Date.now();
+// One request per 1 degree square with a 100 NM radius, at most every 45 seconds: the relay caches
+// each square, so every screen watching the same area shares the same upstream request.
+function maybeFetch(la, lo) {
+  var key = Math.round(la) + "," + Math.round(lo);
+  if (busy || Date.now() - (FETCHED[key] || 0) < 45000) return;
+  FETCHED[key] = Date.now(); fetchTraffic(Math.round(la), Math.round(lo));
+}
+async function fetchTraffic(la, lo) {
+  busy = true;
   try {
     var ctl = typeof AbortController !== "undefined" ? new AbortController() : null;
     var timer = setTimeout(function () { if (ctl) ctl.abort(); }, 20000);
@@ -573,84 +580,63 @@ async function fetchTraffic() {
     var now = Date.now();
     j.ac.forEach(function (a) {
       if (typeof a.lat !== "number" || typeof a.lon !== "number") return;
-      var hex = String(a.hex).toLowerCase();
-      var call = (a.flight || "").trim().toUpperCase();
+      var hex = String(a.hex).toLowerCase(), call = (a.flight || "").trim().toUpperCase(), old = traffic.get(hex);
+      var trail = old && !old.demo ? old.trail : [];
+      if (old && !old.demo && Math.abs(old.lat - a.lat) + Math.abs(old.lon - a.lon) > 0.004) { trail.push([old.lat, old.lon]); if (trail.length > 40) trail.shift(); }
       traffic.set(hex, {
-        hex: hex, call: call || (a.r || "").toUpperCase() || hex.toUpperCase(), reg: (a.r || "").toUpperCase(), type: (a.t || "").toUpperCase(),
-        desc: (a.desc || "").toUpperCase(), kind: kindOf(a), cat: a.category || "",
+        hex: hex, call: call || (a.r || "").toUpperCase() || hex.toUpperCase(), flight: call, reg: (a.r || "").toUpperCase(), type: (a.t || "").toUpperCase(),
+        desc: (a.desc || "").toUpperCase(), own: (a.ownOp || "").toUpperCase(), kind: kindOf(a), cat: a.category || "", squawk: a.squawk || "",
         lat: a.lat, lon: a.lon, alt: a.alt_baro === "ground" ? 0 : (typeof a.alt_baro === "number" ? a.alt_baro : (typeof a.alt_geom === "number" ? a.alt_geom : 0)),
-        gs: typeof a.gs === "number" ? a.gs : 0, trk: typeof a.track === "number" ? a.track : 0, vr: typeof a.baro_rate === "number" ? a.baro_rate : 0,
-        t: now - (typeof a.seen_pos === "number" ? a.seen_pos * 1000 : 0), demo: false
+        ground: a.alt_baro === "ground", gs: typeof a.gs === "number" ? a.gs : 0, trk: typeof a.track === "number" ? a.track : 0, vr: typeof a.baro_rate === "number" ? a.baro_rate : 0,
+        t: now - (typeof a.seen_pos === "number" ? a.seen_pos * 1000 : 0), demo: false, trail: trail
       });
     });
-    if (j.ac.length) { live = true; fetchErrs = 0; if (demoMode) endDemo(); }
-    tileKey = key;
+    if (j.ac.length) { live = true; fetchErrs = 0; lastSource = j.source || ""; if (demoMode) endDemo(); }
   } catch (e) {
     fetchErrs++;
     if (!live || fetchErrs > 2) startDemo();
   }
+  busy = false;
 }
-// drop planes nobody has heard from in 5 minutes
-function prune() { var now = Date.now(); traffic.forEach(function (p, k) { if (!p.demo && now - p.t > 300000) traffic.delete(k); }); }
+// drop flights nobody has heard from in 5 minutes
+function prune() { var now = Date.now(); traffic.forEach(function (p, k) { if (!p.demo && now - p.t > 300000) { traffic.delete(k); if (sel === k) deselect(); } }); }
 
-/* demo traffic: clearly labeled, never logged */
+/* demo traffic around your spot: only when no source answers, always labeled */
 var DEMO = [["SWA2381", "B38M", "AIRLINE", "A3"], ["DAL1442", "A321", "AIRLINE", "A3"], ["UAL617", "B789", "AIRLINE", "A5"], ["FDX1802", "B763", "CARGO", "A5"],
   ["N172SP", "C172", "PRIVATE", "A1"], ["EJA588", "C68A", "BIZJET", "A2"], ["RCH402", "C17", "MIL", "A5"], ["N911UT", "EC35", "HELI", "A7"], ["SKW3304", "E75L", "AIRLINE", "A3"], ["AAL2210", "A21N", "AIRLINE", "A3"]];
-function startDemo() {
-  if (demoMode) return; demoMode = true;
-  for (var i = 0; i < 10; i++) spawnDemo(i);
-}
+function startDemo() { if (demoMode) return; demoMode = true; for (var i = 0; i < 10; i++) spawnDemo(i); }
 function spawnDemo(i) {
-  var d = DEMO[i % DEMO.length], ang = Math.random() * 360, r = 6 + Math.random() * 60, pos = move(P.lat, P.lon, ang, r);
+  var d = DEMO[i % DEMO.length], ang = Math.random() * 360, r = 4 + Math.random() * 50, pos = move(HOME.lat, HOME.lon, ang, r);
   var slow = d[3] === "A1" || d[3] === "A7";
-  traffic.set("demo" + i, { hex: "demo" + i, call: d[0], reg: "", type: d[1], desc: "", kind: d[2], cat: d[3], lat: pos[0], lon: pos[1],
-    alt: slow ? 3000 + Math.random() * 6000 : 18000 + Math.random() * 20000, gs: slow ? 110 + Math.random() * 60 : 380 + Math.random() * 100,
-    trk: Math.random() * 360, vr: 0, t: Date.now(), demo: true, idx: i });
+  traffic.set("demo" + i, { hex: "demo" + i, call: d[0], flight: d[0], reg: "", type: d[1], desc: "", own: "", kind: d[2], cat: d[3], squawk: "", lat: pos[0], lon: pos[1],
+    alt: slow ? 3000 + Math.random() * 6000 : 18000 + Math.random() * 20000, ground: false, gs: slow ? 110 + Math.random() * 60 : 380 + Math.random() * 100,
+    trk: Math.random() * 360, vr: 0, t: Date.now(), demo: true, idx: i, trail: [] });
 }
-function endDemo() { demoMode = false; traffic.forEach(function (p, k) { if (p.demo) traffic.delete(k); }); }
+function endDemo() { demoMode = false; traffic.forEach(function (p, k) { if (p.demo) { traffic.delete(k); if (sel === k) deselect(); } }); }
+function stepDemo() {
+  var now = Date.now();
+  traffic.forEach(function (p) {
+    if (!p.demo) return;
+    var w = where(p, now);
+    if (nmHome(w.lat, w.lon).d > 70) { spawnDemo(p.idx); return; }
+    if (now - p.t > 20000) { p.trail.push([p.lat, p.lon]); if (p.trail.length > 30) p.trail.shift(); p.lat = w.lat; p.lon = w.lon; p.t = now; p.trk = (p.trk + (Math.random() - 0.5) * 6 + 360) % 360; }
+  });
+}
 function where(p, now) { // dead-reckon along track for up to 5 minutes
   var age = Math.min(300, (now - p.t) / 1000), pos = move(p.lat, p.lon, p.trk, p.gs * age / 3600);
   return { lat: pos[0], lon: pos[1], alt: Math.max(0, p.alt + p.vr * age / 60 * (age < 90 ? 1 : 0)) };
 }
 
-/* ================= simulation ================= */
-var lastT = performance.now();
-function step(now) {
-  var dt = Math.min(0.1, (now - lastT) / 1000); lastT = now;
-  var warp = warps[warpI];
-  // bank into turns; the turn rate follows the bank like a real plane
-  var bankTo = hold.left ? -28 : hold.right ? 28 : 0;
-  P.bank += clamp(bankTo - P.bank, -60 * dt, 60 * dt);
-  P.hdg = (P.hdg + P.bank * 0.42 * dt + 360) % 360;
-  if (hold.faster) P.thr = Math.min(560, P.thr + 60 * dt); if (hold.slower) P.thr = Math.max(90, P.thr - 60 * dt);
-  P.spd += clamp(P.thr - P.spd, -15 * dt, 15 * dt);
-  var target = hold.up ? 2500 : hold.down ? -2500 : 0;
-  P.vs += clamp(target - P.vs, -3000 * dt, 3000 * dt);
-  P.alt = clamp(P.alt + P.vs / 60 * dt * warp, 0, 45000);
-  if (P.alt >= 45000) P.vs = Math.min(0, P.vs);
-  // real ground height under you, from the elevation tiles
-  if (now - gndAt > 200) { gndAt = now; P.gnd = groundM(P.lat, P.lon) * 3.28084; }
-  if (P.alt < P.gnd + 40 && now > crashUntil) {
-    crashUntil = now + 3000; P.alt = P.gnd + 3000; P.vs = 0;
-    banner = { text: "CRASHED", sub: "BACK UP TO 3,000 FT ABOVE GROUND", until: Date.now() + 3000, col: "#ff5c3a" };
+/* the camera follows the selected flight in 3D and side view; with none, it stands at your spot */
+function updateFocus(now, dt) {
+  var s = sel ? traffic.get(sel) : null, wall = Date.now();
+  if (s && (view !== "map" || follow)) {
+    var w = where(s, wall); P.lat = w.lat; P.lon = w.lon; P.alt = w.alt; P.hdg = (s.trk + orbit + 360) % 360; P.vs = s.vr; P.dist += s.gs / 3600 * dt;
+  } else if (view !== "map") {
+    skyHdg = (skyHdg + dt * 3) % 360;
+    P.lat = HOME.lat; P.lon = HOME.lon; P.alt = 0; P.vs = 0; P.hdg = (skyHdg + orbit + 360) % 360; P.dist += dt * 0.05;
   }
-  var nm = P.spd / 3600 * dt * warp, pos = move(P.lat, P.lon, P.hdg, nm);
-  P.lat = clamp(pos[0], 18, 55); P.lon = clamp(pos[1], -135, -60); P.dist += nm;
-  // demo planes that wander off come back near the player
-  var wall = Date.now();
-  traffic.forEach(function (p) { if (!p.demo) return; var w = where(p, wall), r = nmTo(w.lat, w.lon); if (r.d > 80) spawnDemo(p.idx); });
-  checkSpots(wall);
-}
-function checkSpots(now) {
-  traffic.forEach(function (p) {
-    if (p.demo || spotted[p.hex]) return;
-    var w = where(p, now), r = nmTo(w.lat, w.lon);
-    if (r.d < 2.6 && Math.abs(w.alt - P.alt) < 3000) {
-      spotted[p.hex] = { call: p.call, type: p.type, desc: p.desc, kind: p.kind, when: now, near: nearestAirport()[0] };
-      try { localStorage.setItem("standby.spotted", JSON.stringify(spotted)); } catch (e) {}
-      banner = { text: "SPOTTED " + p.call, sub: (p.type || "UNKNOWN") + "  " + p.kind, until: now + 4000, col: KIND_COL[p.kind] };
-    }
-  });
+  if (now - gndAt > 250) { gndAt = now; P.gnd = groundM(P.lat, P.lon) * 3.28084; }
 }
 function nearestAirport() {
   var best = null, bd = 1e9;
@@ -672,7 +658,7 @@ function fmtAlt(a) { return a >= 18000 ? "FL" + Math.round(a / 100) : (Math.roun
 
 /* ================= MAP VIEW ================= */
 function drawMap(now) {
-  var z = zooms[zoomI], cx = BW / 2, cy = BH / 2 + 6, cosl = Math.cos(P.lat * DEG);
+  var z = ZM, cx = BW / 2, cy = BH / 2, cosl = Math.cos(P.lat * DEG);
   var d = img.data, k = 0;
   var lat0 = P.lat + cy / z / 60, dLat = 1 / z / 60, dLon = 1 / z / (60 * cosl), lon0 = P.lon - cx / z / (60 * cosl);
   var gx0 = Math.floor(P.lon * 60 * cosl * z) - Math.floor(cx), gy0 = Math.floor(P.lat * 60 * z) + Math.floor(cy);
@@ -714,33 +700,55 @@ function drawMap(now) {
 
   // clouds and their shadows, world-anchored
   var cell = 9, ccx = Math.floor(P.lon * 60 * cosl / cell), ccy = Math.floor(P.lat * 60 / cell), span = Math.ceil(Math.max(BW, BH) / z / cell / 2) + 1;
-  if (z >= 0.4 && span < 40) {
+  if (z >= 0.4 && span < 40 && style === "pixel") {
     for (var gy = ccy - span; gy <= ccy + span; gy++) for (var gx = ccx - span; gx <= ccx + span; gx++) {
       var hc = hash2(gx * 7 + 3, gy * 13 + 1); if (hc < 0.9) continue;
       var wx = (gx + hash2(gx, gy)) * cell, wy = (gy + hash2(gy, gx)) * cell;
       var sx = cx + (wx - P.lon * 60 * cosl) * z, sy = cy - (wy - P.lat * 60) * z, rr = (1.2 + (hc - 0.9) * 14) * z;
       if (sx < -rr * 3 || sx > BW + rr * 3 || sy < -rr * 3 || sy > BH + rr * 3) continue;
-      var lift = P.alt < 8000 ? 0 : 1;
-      b.fillStyle = "rgba(0,0,20,0.18)"; puff(sx + 4 + lift * 2, sy + 4, rr);
-      b.fillStyle = "rgba(255,255,255," + (P.alt > 8000 ? 0.82 : 0.6) + ")"; puff(sx, sy, rr);
+      b.fillStyle = "rgba(0,0,20,0.14)"; puff(sx + 5, sy + 4, rr);
+      b.fillStyle = "rgba(255,255,255,0.5)"; puff(sx, sy, rr);
     }
   }
 
-  // traffic
-  var list = visible(now), labels = 0;
+  // your spot
+  var hs = toScr(HOME.lat, HOME.lon), hx = Math.round(hs[0]), hy2 = Math.round(hs[1]);
+  b.fillStyle = "#141a2e"; b.fillRect(hx - 4, hy2 - 4, 9, 9); b.fillStyle = "#ffb000"; b.fillRect(hx - 3, hy2 - 3, 7, 7); b.fillStyle = "#141a2e"; b.fillRect(hx - 1, hy2 - 1, 3, 3);
+  if (z >= 0.45) text(HOME.name, hx, hy2 + 7, "#ffb000", "center");
+
+  // trails, then planes, then the selected flight on top
+  var list = visible(now), labels = 0; TAPS = [];
+  list.forEach(function (p) {
+    var tr = traffic.get(p.hex); if (!tr || !tr.trail || !tr.trail.length) return;
+    b.fillStyle = p.hex === sel ? "#ffffff" : (p.demo ? "rgba(200,205,224,0.5)" : KIND_COL[p.kind]);
+    var pts = tr.trail.concat([[p.w.lat, p.w.lon]]);
+    for (var i = 1; i < pts.length; i++) {
+      var a1 = toScr(pts[i - 1][0], pts[i - 1][1]), a2 = toScr(pts[i][0], pts[i][1]), n2 = Math.max(1, Math.round(Math.hypot(a2[0] - a1[0], a2[1] - a1[1]) / 2));
+      for (var k2 = 0; k2 < n2; k2++) b.fillRect(Math.round(a1[0] + (a2[0] - a1[0]) * k2 / n2), Math.round(a1[1] + (a2[1] - a1[1]) * k2 / n2), 1, 1);
+    }
+  });
+  var selP = null;
   list.forEach(function (p) {
     var s = toScr(p.w.lat, p.w.lon);
     if (s[0] < -20 || s[0] > BW + 20 || s[1] < -20 || s[1] > BH + 20) return;
-    var shape = shapeFor(p.kind, p.cat, p.type), sc = z >= 1.6 ? 0.55 : 0.4;
+    TAPS.push([s[0], s[1], p.hex]);
+    if (p.hex === sel) { selP = [p, s]; return; }
+    var shape = shapeFor(p.kind, p.cat, p.type), sc = z >= 1.6 ? 0.6 : 0.45;
     var sp = topSprite(shape, p.kind, p.call, sc, p.trk, false);
     b.drawImage(sp, Math.round(s[0] - sp.width / 2), Math.round(s[1] - sp.height / 2));
-    if (labels < 8 && z >= 0.45) { labels++; text(p.call, s[0] + 7, s[1] - 9, p.demo ? "#9aa0b8" : KIND_COL[p.kind]); if (z >= 1.6) text(fmtAlt(p.w.alt), s[0] + 7, s[1] - 1, "#c8cde0"); }
+    if (labels < 10 && z >= 0.45) { labels++; text(p.call, s[0] + 7, s[1] - 9, p.demo ? "#9aa0b8" : KIND_COL[p.kind]); if (z >= 1.6) text(fmtAlt(p.w.alt), s[0] + 7, s[1] - 1, "#c8cde0"); }
   });
-
-  // player: shadow offset by altitude, then the plane
-  var psc = z >= 1.6 ? 1 : 0.75, off = Math.min(14, 2 + P.alt / 3500);
-  var sh = shadowSprite("jet", psc, P.hdg); b.globalAlpha = 0.28; b.drawImage(sh, Math.round(cx - sh.width / 2 + off), Math.round(cy - sh.height / 2 + off)); b.globalAlpha = 1;
-  var me = topSprite("jet", "AIRLINE", "", psc, P.hdg, true); b.drawImage(me, Math.round(cx - me.width / 2), Math.round(cy - me.height / 2));
+  if (selP) {
+    var p0 = selP[0], s0 = selP[1], shp = shapeFor(p0.kind, p0.cat, p0.type), big = topSprite(shp, p0.kind, p0.call, 1, p0.trk, false);
+    var off = Math.min(12, 2 + p0.w.alt / 4000), sh = shadowSprite(shp, 1, p0.trk);
+    b.globalAlpha = 0.3; b.drawImage(sh, Math.round(s0[0] - sh.width / 2 + off), Math.round(s0[1] - sh.height / 2 + off)); b.globalAlpha = 1;
+    b.drawImage(big, Math.round(s0[0] - big.width / 2), Math.round(s0[1] - big.height / 2));
+    var r2 = Math.round(big.width / 2) + 2, blink = Math.floor(now / 400) % 2;
+    b.fillStyle = blink ? "#ffffff" : "#ffb000";
+    [[-1, -1], [1, -1], [-1, 1], [1, 1]].forEach(function (c) { var x0 = Math.round(s0[0] + c[0] * r2), y0 = Math.round(s0[1] + c[1] * r2); b.fillRect(x0 - (c[0] > 0 ? 3 : 0), y0, 4, 1); b.fillRect(x0, y0 - (c[1] > 0 ? 3 : 0), 1, 4); });
+    text(p0.call, s0[0] + r2 + 3, s0[1] - 9, "#ffffff");
+    text(fmtAlt(p0.w.alt), s0[0] + r2 + 3, s0[1] - 1, "#ffe08a");
+  }
   hud(now, list);
 }
 function puff(x, y, r) { b.beginPath(); b.arc(Math.round(x), Math.round(y), r, 0, Math.PI * 2); b.arc(Math.round(x + r * 0.9), Math.round(y + r * 0.2), r * 0.8, 0, Math.PI * 2); b.arc(Math.round(x - r * 0.9), Math.round(y + r * 0.3), r * 0.7, 0, Math.PI * 2); b.fill(); }
@@ -778,9 +786,12 @@ function draw3D(now) {
   var sky = skyColors(), haze = sky.bands[sky.bands.length - 1], lut = fogLUT(haze, sky.stars ? 0.42 : sky.low ? 0.82 : 1);
   var ZB = 15, cosl = Math.cos(P.lat * DEG), mpp = 156543.03 * cosl / Math.pow(2, ZB);
   var th = P.hdg * DEG, fx = Math.sin(th), fy = -Math.cos(th), rx = Math.cos(th), ry = Math.sin(th);
-  var plX = lon2x(P.lon, ZB), plY = lat2y(P.lat, ZB), back = 260 / mpp;
-  var camX = plX - fx * back, camY = plY - fy * back, camH = (P.alt * 0.3048 + 60) / mpp;
-  var pitch = clamp(P.vs / 2500, -1, 1), hz = Math.round(BH * 0.4 + pitch * BH * 0.07), focal = BW / 2;
+  // following: sit behind and above the flight. Sky view: stand at your spot and look up.
+  var subj = sel ? traffic.get(sel) : null, sShape = subj ? shapeFor(subj.kind, subj.cat, subj.type) : "jet";
+  var plX = lon2x(P.lon, ZB), plY = lat2y(P.lat, ZB), back = subj ? Math.max(160, (SIZE_M[sShape] || 38) * 7) / mpp : 0;
+  var camX = plX - fx * back, camY = plY - fy * back;
+  var camH = subj ? (P.alt * 0.3048 + Math.max(40, (SIZE_M[sShape] || 38) * 1.6)) / mpp : (P.gnd * 0.3048 + 25) / mpp;
+  var pitch = subj ? clamp(P.vs / 2500, -1, 1) : 0, hz = Math.round(subj ? BH * 0.4 + pitch * BH * 0.07 : BH * 0.74), focal = BW / 2;
   if (!colStep) colStep = BW > 300 ? 2 : 1;
   var cols = Math.ceil(BW / colStep);
 
@@ -835,8 +846,9 @@ function draw3D(now) {
   }
 
   // real planes, farthest first, sized by their true length at that distance
-  var list = visible(now), drawn = [];
+  var list = visible(now), drawn = []; TAPS = [];
   for (var n = list.length - 1; n >= 0; n--) {
+    if (list[n].hex === sel) continue;
     var p = list[n], gx = lon2x(p.w.lon, ZB) - camX, gy = lat2y(p.w.lat, ZB) - camY;
     var zf = gx * fx + gy * fy, xr = gx * rx + gy * ry;
     if (zf < 3) continue;
@@ -849,14 +861,17 @@ function draw3D(now) {
       var sp = sideSprite(shape, p.kind, p.call, 1, flip, 0, false), scl = Math.min(4, wpx / sp.width * 1.6);
       b.drawImage(sp, Math.round(px - sp.width * scl / 2), Math.round(py - sp.height * scl / 2), Math.round(sp.width * scl), Math.round(sp.height * scl));
     }
-    drawn.push([p, px, py]);
+    drawn.push([p, px, py]); TAPS.push([px, py, p.hex]);
   }
-  drawn.filter(function (d) { return d[0].r.d < 30; }).slice(-6).forEach(function (d) { text(d[0].call, d[1], d[2] - 12, d[0].demo ? "#9aa0b8" : KIND_COL[d[0].kind], "center"); text(fmtAlt(d[0].w.alt), d[1], d[2] + 4, "#c8cde0", "center"); });
+  drawn.filter(function (d) { return d[0].r.d < (subj ? 30 : 60); }).slice(-6).forEach(function (d) { text(d[0].call, d[1], d[2] - 12, d[0].demo ? "#9aa0b8" : KIND_COL[d[0].kind], "center"); text(fmtAlt(d[0].w.alt), d[1], d[2] + 4, "#c8cde0", "center"); });
 
-  // you, from behind, banking with the turn
-  var me = rearSprite(P.bank, BW > 300 ? 2.4 : 2), myY = hz + 0.23 * focal + Math.sin(now / 500) * 0.8;
-  b.drawImage(me, Math.round(BW / 2 - me.width / 2), Math.round(myY - me.height / 2));
-  if (P.alt > 26000) { b.fillStyle = "rgba(255,255,255,0.6)"; for (var e = 2; e < 22; e += 2) { b.fillRect(Math.round(BW / 2 - 10.6 * (BW > 300 ? 2.4 : 2)), Math.round(myY + 4 + e), 1, 1); b.fillRect(Math.round(BW / 2 + 10.6 * (BW > 300 ? 2.4 : 2)), Math.round(myY + 4 + e), 1, 1); } }
+  // the followed flight, from behind, sized to its type
+  if (subj) {
+    var rs = (BW > 300 ? 2.4 : 2) * ({ heavy: 1.15, jet: 1, biz: 0.75, prop: 0.6, heli: 0.6, fighter: 0.7 }[sShape] || 1);
+    var me = rearSprite(subj.kind, subj.call, Math.round(rs * 10) / 10), myY = hz + (camH - P.alt * 0.3048 / mpp) / back * focal + Math.sin(now / 500) * 0.8;
+    b.drawImage(me, Math.round(BW / 2 - me.width / 2), Math.round(myY - me.height / 2));
+    if (P.alt > 26000) { b.fillStyle = "rgba(255,255,255,0.6)"; for (var e = 2; e < 22; e += 2) { b.fillRect(Math.round(BW / 2 - 5.3 * rs), Math.round(myY + 2.2 * rs + e), 1, 1); b.fillRect(Math.round(BW / 2 + 5.3 * rs), Math.round(myY + 2.2 * rs + e), 1, 1); } }
+  } else text("LOOKING " + dirName(P.hdg) + " FROM " + HOME.name, BW / 2, hz + 8, "#ffffff", "center");
   hud(now, list);
 
   // older devices: draw every second or third column if frames run long
@@ -940,8 +955,9 @@ function drawSide(now) {
   [10000, 20000, 30000, 40000].forEach(function (a) { var yy = Math.round(altY(a)); for (var x = 0; x < 10; x += 2) b.fillRect(x, yy, 1, 1); text(a / 1000 + "K", 3, yy - 9, "rgba(255,255,255,0.55)"); });
 
   // real planes within 15 NM either side of your line of flight
-  var list = visible(now), shown = [];
+  var list = visible(now), shown = []; TAPS = [];
   list.forEach(function (p) {
+    if (p.hex === sel) return;
     var a = (90 - P.hdg) * DEG, ux = Math.cos(a), uy = Math.sin(a);
     var along = p.r.dx * ux + p.r.dy * uy, across = -p.r.dx * uy + p.r.dy * ux;
     if (Math.abs(across) > 15) return;
@@ -953,18 +969,23 @@ function drawSide(now) {
     b.globalAlpha = 1 - Math.abs(across) / 30;
     b.drawImage(sp, Math.round(x - sp.width / 2), Math.round(y - sp.height / 2));
     b.globalAlpha = 1;
-    shown.push(p);
+    shown.push(p); TAPS.push([x, y, p.hex]);
     if (shown.length <= 8) text(p.call, x, y - sp.height / 2 - 8, p.demo ? "#9aa0b8" : KIND_COL[p.kind], "center");
   });
 
-  // you
-  var pitch = clamp(P.vs / 2500, -1, 1);
-  var me = sideSprite("jet", "AIRLINE", "", 1.5, false, pitch, true);
-  var myY = altY(P.alt);
-  var bob = Math.sin(now / 400) * 0.6;
-  b.drawImage(me, playerX - Math.round(me.width / 2), Math.round(myY - me.height / 2 + bob));
-  // engine contrail above 25,000 ft
-  if (P.alt > 25000) { b.fillStyle = "rgba(255,255,255,0.5)"; for (var tx = 1; tx < 40; tx += 2) b.fillRect(playerX - 18 - tx, Math.round(myY + 2 + bob), 1, 1); }
+  // the selected flight, or a marker at your spot
+  var subj = sel ? traffic.get(sel) : null;
+  if (subj) {
+    var pitch = clamp(P.vs / 2500, -1, 1), me = sideSprite(shapeFor(subj.kind, subj.cat, subj.type), subj.kind, subj.call, 1.5, false, pitch, false);
+    var myY = altY(P.alt), bob = Math.sin(now / 400) * 0.6;
+    b.drawImage(me, playerX - Math.round(me.width / 2), Math.round(myY - me.height / 2 + bob));
+    text(subj.call, playerX, myY - me.height / 2 - 9, "#ffffff", "center");
+    if (P.alt > 25000) { b.fillStyle = "rgba(255,255,255,0.5)"; for (var tx = 1; tx < 40; tx += 2) b.fillRect(playerX - 18 - tx, Math.round(myY + 2 + bob), 1, 1); }
+  } else {
+    var gy0 = Math.round(altY(P.gnd));
+    b.fillStyle = "#ffb000"; b.fillRect(playerX - 1, gy0 - 8, 3, 8); b.fillRect(playerX - 3, gy0 - 10, 7, 3);
+    text("YOU", playerX, gy0 - 20, "#ffb000", "center");
+  }
   hud(now, list);
 }
 function cloudPix(x, y, r) { x = Math.round(x); y = Math.round(y); b.fillRect(x - r, y, r * 2, 3); b.fillRect(x - r + 2, y - 2, r * 2 - 4, 2); b.fillRect(x - r / 2, y - 4, r, 2); b.fillRect(x - r + 3, y + 3, r * 2 - 6, 1); }
@@ -972,114 +993,180 @@ function mixHaze(a, c, f) { var x = hexRgb(a), y = hexRgb(c); return "rgb(" + Ma
 
 /* ================= HUD ================= */
 function hud(now, list) {
-  var tb = document.getElementById("top").getBoundingClientRect(), hy = tb.left / SCALE < 104 ? Math.ceil(tb.bottom / SCALE) + 3 : 4;
-  box(4, hy, 92, 42);
-  text("HDG " + String(Math.round(P.hdg)).padStart(3, "0") + " " + dirName(P.hdg), 8, hy + 3, "#ffe08a");
-  text("SPD " + Math.round(P.spd) + "KT", 8, hy + 12, "#ffffff");
-  text("ALT " + fmtAlt(P.alt), 8, hy + 21, "#ffffff");
-  var vs = Math.round(P.vs / 100) * 100, agl = Math.max(0, Math.round((P.alt - P.gnd) / 100) * 100);
-  text((vs > 0 ? "+" : "") + vs + " FPM", 8, hy + 30, vs > 0 ? "#9fd36a" : vs < 0 ? "#ff9a7a" : "#9aa0b8");
-  text(agl.toLocaleString("en-US") + " AGL", 92, hy + 30, agl < 1000 ? "#ff5c3a" : "#9aa0b8", "right");
-  if (agl < 1000 && P.vs < -200 && Math.floor(now / 300) % 2) { box(BW / 2 - 34, BH * 0.18, 68, 14); text("PULL UP", BW / 2, BH * 0.18 + 3, "#ff5c3a", "center"); }
-  var ap = nearestAirport();
-  var place = ap[1] < 25 ? "OVER " + ap[2][1] : ap[0] + " " + Math.round(ap[1]) + "NM " + dirName(bearingTo(ap[2][2], ap[2][3]));
-  var real = list.filter(function (p) { return !p.demo; }).length;
-  var status = demoMode ? "DEMO TRAFFIC" : live ? real + " REAL PLANES" : "LOADING TRAFFIC";
-  var y2 = hy + 46, x2 = 4;
-  box(x2, y2, Math.max(92, b.measureText(place).width + 10), 24);
-  var cr = document.getElementById("credit"), crTop = Math.round((y2 + 28 + (warps[warpI] > 1 ? 10 : 0)) * SCALE) + "px";
+  var tb = document.getElementById("top").getBoundingClientRect(), hy = tb.left / SCALE < 110 ? Math.ceil(tb.bottom / SCALE) + 3 : 4;
+  var real = 0; traffic.forEach(function (p) { if (!p.demo) real++; });
+  var status = demoMode ? "DEMO TRAFFIC" : live ? real + " LIVE FLIGHTS" : "LOADING FLIGHTS";
+  var ap = nearestAirport(), place = view === "map" && !follow ? (ap[1] < 25 ? "NEAR " + ap[2][1] : ap[0] + " " + Math.round(ap[1]) + "NM") : "";
+  var subj = sel ? traffic.get(sel) : null;
+  var line1 = subj && view !== "map" ? "FOLLOWING " + subj.call : view === "3d" ? "SKY OVER " + HOME.name : view === "side" ? "ABOVE " + HOME.name : HOME.name;
+  b.font = "8px Silkscreen, monospace";
+  var w = Math.max(96, b.measureText(line1).width + 10, b.measureText(place).width + 10);
+  box(4, hy, w, place ? 33 : 24);
+  text(line1, 8, hy + 3, "#ffffff");
+  text(status, 8, hy + 12, demoMode ? "#ff9a7a" : "#9fd36a");
+  if (place) text(place, 8, hy + 21, "#c8cde0");
+  if (auto) text("AUTO", 4 + w - 4, hy + 3, "#ffb000", "right");
+  var cr = document.getElementById("credit"), crTop = Math.round((hy + (place ? 37 : 28)) * SCALE) + "px";
   if (cr.style.top !== crTop) cr.style.top = crTop;
-  text(place, x2 + 4, y2 + 3, "#ffffff");
-  text(status, x2 + 4, y2 + 12, demoMode ? "#ff9a7a" : "#9fd36a");
-  if (warps[warpI] > 1) text("TIME X" + warps[warpI], x2 + 4, y2 + 26, "#ffb000");
-  var cnt = Object.keys(spotted).length;
-  text("LOG " + cnt, BW - 4, BH - 12 - deckH(), "#ffe08a", "right");
-  if (banner && now < banner.until) {
-    var w = Math.max(b.measureText(banner.text).width, b.measureText(banner.sub).width) + 14;
-    box(BW / 2 - w / 2, BH * 0.3, w, 24);
-    if (Math.floor(now / 250) % 2) text(banner.text, BW / 2, BH * 0.3 + 3, banner.col, "center"); else text(banner.text, BW / 2, BH * 0.3 + 3, "#ffffff", "center");
-    text(banner.sub, BW / 2, BH * 0.3 + 13, "#c8cde0", "center");
-  }
 }
-function bearingTo(la, lo) { var r = nmTo(la, lo); return (Math.atan2(r.dx, r.dy) / DEG + 360) % 360; }
-function deckH() { return Math.round(document.getElementById("deck").offsetHeight / SCALE); }
+function dirName2(h) { return ["N", "NE", "E", "SE", "S", "SW", "W", "NW"][Math.round(((h % 360) + 360) % 360 / 45) % 8]; }
+
+/* ================= flight card ================= */
+var $ = function (id) { return document.getElementById(id); };
+var KIND_NAME = { AIRLINE: "AIRLINE", CARGO: "CARGO", MIL: "MILITARY", GOV: "GOVERNMENT", BIZJET: "BIZ JET", PRIVATE: "PRIVATE", HELI: "HELICOPTER" };
+function select(hex, how) {
+  var p = traffic.get(hex); if (!p) return;
+  sel = hex; follow = true; orbit = 0;
+  if (how === "3d") { view = "3d"; syncButtons(); }
+  $("card").hidden = false;
+  fillCard(true);
+  lookupRoute(p);
+}
+function deselect() { sel = null; follow = false; orbit = 0; $("card").hidden = true; document.documentElement.style.setProperty("--cardh", "0px"); }
+function lookupRoute(p) {
+  if (p.demo || !/^[A-Z]{3}\d/.test(p.flight || "") || ROUTES.has(p.flight)) return;
+  ROUTES.set(p.flight, null);
+  fetch("api/route?callsign=" + encodeURIComponent(p.flight) + "&lat=" + p.lat.toFixed(3) + "&lon=" + p.lon.toFixed(3), { cache: "no-store" })
+    .then(function (r) { return r.ok ? r.json() : null; })
+    .then(function (j) { if (j && j.route) { ROUTES.set(p.flight, j); if (sel === p.hex) fillCard(true); } })
+    .catch(function () {});
+}
+function fillCard(full) {
+  var p = sel ? traffic.get(sel) : null; if (!p) return;
+  var w = where(p, Date.now()), h = nmHome(w.lat, w.lon), rt = ROUTES.get(p.flight);
+  if (full) {
+    $("cCall").textContent = p.call + (p.demo ? " (DEMO)" : "");
+    $("cKind").textContent = KIND_NAME[p.kind] || p.kind; $("cKind").style.color = KIND_COL[p.kind];
+    var airline = (rt && rt.airline) || "";
+    $("cRoute").textContent = rt ? (airline ? airline.toUpperCase() + "  " : "") + rt.route + "  " + shortName(rt.fromCity || rt.from) + " TO " + shortName(rt.toCity || rt.to)
+      : p.demo ? "DEMO TRAFFIC, NOT A REAL FLIGHT" : (p.own ? p.own : (/^[A-Z]{3}\d/.test(p.flight || "") ? "LOOKING UP ROUTE..." : "NO PUBLIC ROUTE"));
+    var typeTxt = p.desc || p.type || "UNKNOWN TYPE";
+    $("cType").textContent = typeTxt + (p.reg && p.reg !== p.call ? "  " + p.reg : "") + (p.squawk ? "  SQUAWK " + p.squawk : "");
+  }
+  $("sAlt").textContent = p.ground ? "ON GROUND" : Math.round(w.alt).toLocaleString("en-US") + " FT";
+  $("sSpd").textContent = Math.round(p.gs) + " KT";
+  $("sVs").textContent = Math.abs(p.vr) < 200 ? "LEVEL" : (p.vr > 0 ? "+" : "") + Math.round(p.vr / 100) * 100 + " FPM";
+  $("sHdg").textContent = String(Math.round(p.trk)).padStart(3, "0") + " " + dirName2(p.trk);
+  $("sDist").textContent = (h.d < 10 ? h.d.toFixed(1) : Math.round(h.d)) + " NM " + dirName2(h.brg);
+  $("cFollow").textContent = view === "3d" ? "SIDE VIEW" : "FOLLOW IN 3D";
+  var cardAtBottom = !(innerWidth > innerHeight && innerHeight <= 600);
+  document.documentElement.style.setProperty("--cardh", cardAtBottom ? ($("card").offsetHeight + 8) + "px" : "0px");
+}
+function shortName(n) { return (n || "").toUpperCase().replace(/ INTERNATIONAL AIRPORT$| AIRPORT$/, ""); }
+
+/* ================= flight list ================= */
+function openList() {
+  var arr = []; traffic.forEach(function (p) { var w = where(p, Date.now()), h = nmHome(w.lat, w.lon); arr.push({ p: p, w: w, h: h }); });
+  arr.sort(function (a, c) { return a.h.d - c.h.d; });
+  $("listTitle").textContent = "Flights near " + HOME.name.toLowerCase().replace(/\b\w/g, function (c) { return c.toUpperCase(); });
+  $("listNote").textContent = demoMode ? "No flight source is answering right now, so these are demo planes." : arr.length + " flights within about 100 nautical miles. Tap one to follow it.";
+  var box2 = $("flights"); box2.innerHTML = "";
+  arr.slice(0, 60).forEach(function (o) {
+    var bt = document.createElement("button");
+    bt.innerHTML = '<span style="color:' + KIND_COL[o.p.kind] + '"></span>';
+    bt.firstChild.textContent = o.p.call.padEnd(8);
+    bt.appendChild(document.createTextNode(" " + (o.p.type || "----") + "  " + (o.p.ground ? "GND" : fmtAlt(o.w.alt)) + "  " + (o.h.d < 10 ? o.h.d.toFixed(1) : Math.round(o.h.d)) + "NM " + dirName2(o.h.brg)));
+    bt.addEventListener("click", function () { $("listSheet").hidden = true; select(o.p.hex, "3d"); });
+    box2.appendChild(bt);
+  });
+  $("listSheet").hidden = false;
+}
+
+/* ================= auto mode: follow the nearest flights in turn, for a tablet on the wall ================= */
+function stepAuto() {
+  if (!auto || Date.now() - autoAt < 40000) return;
+  autoAt = Date.now();
+  var arr = []; traffic.forEach(function (p) { if (p.ground) return; var w = where(p, Date.now()); arr.push([nmHome(w.lat, w.lon).d, p.hex]); });
+  arr.sort(function (a, c) { return a[0] - c[0]; });
+  var pool = arr.slice(0, 6).filter(function (a) { return a[1] !== sel; });
+  if (!pool.length) return;
+  select(pool[Math.floor(Math.random() * pool.length)][1], view === "map" ? "3d" : view);
+}
 
 /* ================= loop ================= */
+var lastT = performance.now(), cardAt = 0, demoAt = 0;
 function frame(now) {
-  step(now);
-  frameNo++;
+  var dt = Math.min(0.1, (now - lastT) / 1000); lastT = now; frameNo++;
+  updateFocus(now, dt);
   if (CELL) { if (view === "map") drawMap(Date.now()); else if (view === "side") drawSide(Date.now()); else draw3D(Date.now()); }
-  if ((frameNo & 63) === 0) evictTiles();
   ctx.imageSmoothingEnabled = false;
   ctx.drawImage(buf, 0, 0, BW * SCALE * (cv.width / innerWidth), BH * SCALE * (cv.height / innerHeight));
-  if (Date.now() - lastFetch > 60000 || (Math.round(P.lat) + "," + Math.round(P.lon)) !== tileKey && Date.now() - lastFetch > 8000) { fetchTraffic(); prune(); }
+  if ((frameNo & 63) === 0) evictTiles();
+  maybeFetch(HOME.lat, HOME.lon); maybeFetch(P.lat, P.lon);
+  if (now - demoAt > 1000) { demoAt = now; stepDemo(); prune(); stepAuto(); }
+  if (sel && now - cardAt > 500) { cardAt = now; fillCard(false); }
   requestAnimationFrame(frame);
 }
-setInterval(function () { try { localStorage.setItem("standby.fly", JSON.stringify({ lat: P.lat, lon: P.lon, alt: P.alt, hdg: P.hdg })); } catch (e) {} }, 5000);
 
 /* ================= controls ================= */
-function bindHold(el) {
-  var k = el.getAttribute("data-hold");
-  var on = function (e) { e.preventDefault(); hold[k] = true; el.classList.add("on"); };
-  var off = function () { hold[k] = false; el.classList.remove("on"); };
-  el.addEventListener("pointerdown", on); el.addEventListener("pointerup", off); el.addEventListener("pointerleave", off); el.addEventListener("pointercancel", off);
-}
-document.querySelectorAll("[data-hold]").forEach(bindHold);
-var KEYS = { ArrowLeft: "left", a: "left", ArrowRight: "right", d: "right", ArrowUp: "up", w: "up", ArrowDown: "down", s: "down", e: "faster", q: "slower" };
-addEventListener("keydown", function (e) {
-  if (KEYS[e.key]) { hold[KEYS[e.key]] = true; e.preventDefault(); }
-  if (e.key === "v") toggleView(); if (e.key === "z") cycleZoom(); if (e.key === "t") cycleWarp(); if (e.key === "m") cycleStyle();
-});
-addEventListener("keyup", function (e) { if (KEYS[e.key]) hold[KEYS[e.key]] = false; });
-var $ = function (id) { return document.getElementById(id); };
-var VIEWS = ["3d", "map", "side"], STYLES = ["sat", "osm", "pixel"], STYLE_NAME = { sat: "SAT", osm: "STREET", pixel: "PIXEL" };
-function savePrefs() { try { localStorage.setItem("standby.flyview", JSON.stringify({ view: view, style: style })); } catch (e) {} }
+var VIEWS = ["map", "3d", "side"], STYLES = ["sat", "osm", "pixel"], STYLE_NAME = { sat: "SAT", osm: "STREET", pixel: "PIXEL" };
+function savePrefs() { try { localStorage.setItem("standby.liveview", JSON.stringify({ view: view, style: style, zm: ZM })); } catch (e) {} }
 function syncButtons() {
   $("bView").textContent = view === "3d" ? "3D" : view === "map" ? "MAP" : "SIDE";
   $("bStyle").textContent = STYLE_NAME[style];
-  $("bZoom").hidden = view !== "map";
+  $("bAuto").classList.toggle("on", auto);
+  $("zoom").hidden = view !== "map";
   // street tiles are for the map view only, to stay within OpenStreetMap's tile policy
   var shown = style === "osm" && view !== "map" ? "sat" : style;
-  $("credit").innerHTML = shown === "osm" ? 'Map &copy; <a href="https://www.openstreetmap.org/copyright" target="_blank" rel="noopener">OpenStreetMap</a> contributors'
-    : shown === "sat" ? "Imagery USGS National Map. Elevation Mapzen Terrain Tiles (USGS and others). Planes adsb.lol and friends."
-    : "Elevation Mapzen Terrain Tiles. Planes adsb.lol and friends.";
+  $("credit").innerHTML = shown === "osm" ? 'Map &copy; <a href="https://www.openstreetmap.org/copyright" target="_blank" rel="noopener">OpenStreetMap</a> contributors. Flights adsb.lol and friends.'
+    : shown === "sat" ? "Imagery USGS National Map. Elevation Mapzen Terrain Tiles. Flights adsb.lol and friends."
+    : "Elevation Mapzen Terrain Tiles. Flights adsb.lol and friends.";
+  if (sel) fillCard(false);
 }
-function toggleView() { view = VIEWS[(VIEWS.indexOf(view) + 1) % VIEWS.length]; syncButtons(); savePrefs(); }
+function cycleView() { view = VIEWS[(VIEWS.indexOf(view) + 1) % VIEWS.length]; orbit = 0; syncButtons(); savePrefs(); }
 function cycleStyle() { style = STYLES[(STYLES.indexOf(style) + 1) % STYLES.length]; syncButtons(); savePrefs(); prefetch(); }
-function cycleZoom() { zoomI = (zoomI + 1) % zooms.length; }
-function cycleWarp() { warpI = (warpI + 1) % warps.length; $("bWarp").textContent = "X" + warps[warpI]; }
-$("bView").addEventListener("click", toggleView);
+function zoomBy(f) { ZM = clamp(ZM * f, 0.08, 14); savePrefs(); }
+$("bView").addEventListener("click", cycleView);
 $("bStyle").addEventListener("click", cycleStyle);
-$("bZoom").addEventListener("click", cycleZoom);
-$("bWarp").addEventListener("click", cycleWarp);
-$("bAuto").addEventListener("click", function () { P.vs = 0; hold.up = hold.down = false; });
+$("bList").addEventListener("click", openList);
+$("bListClose").addEventListener("click", function () { $("listSheet").hidden = true; });
+$("bAuto").addEventListener("click", function () { auto = !auto; autoAt = 0; syncButtons(); });
+$("bHome").addEventListener("click", function () { deselect(); P.lat = HOME.lat; P.lon = HOME.lon; if (view !== "map") { view = "map"; syncButtons(); } });
 $("bExit").addEventListener("click", function () { location.href = "./"; });
-$("bLog").addEventListener("click", function () {
-  var keys = Object.keys(spotted).sort(function (a, c) { return spotted[c].when - spotted[a].when; });
-  var tally = {}; keys.forEach(function (k) { tally[spotted[k].kind] = (tally[spotted[k].kind] || 0) + 1; });
-  $("tally").innerHTML = ""; Object.keys(KIND_COL).forEach(function (k) { var i = document.createElement("i"); i.style.color = KIND_COL[k]; i.textContent = k + " " + (tally[k] || 0); $("tally").appendChild(i); });
-  $("entries").innerHTML = keys.length ? "" : '<p>Nothing logged yet. Find a real plane and fly alongside it.</p>';
-  keys.slice(0, 200).forEach(function (k) {
-    var s = spotted[k], row = document.createElement("div"); row.className = "entry";
-    var l = document.createElement("b"); l.textContent = s.call; l.style.color = KIND_COL[s.kind] || "#fff";
-    var r = document.createElement("span"); r.textContent = (s.type || "?") + " " + s.kind + " near " + s.near + " " + new Date(s.when).toLocaleDateString();
-    row.appendChild(l); row.appendChild(r); $("entries").appendChild(row);
-  });
-  $("logSheet").hidden = false;
+$("bIn").addEventListener("click", function () { zoomBy(1.6); });
+$("bOut").addEventListener("click", function () { zoomBy(1 / 1.6); });
+$("cClose").addEventListener("click", deselect);
+$("cFollow").addEventListener("click", function () { view = view === "3d" ? "side" : "3d"; orbit = 0; syncButtons(); savePrefs(); });
+$("cMap").addEventListener("click", function () { view = "map"; follow = true; syncButtons(); savePrefs(); });
+
+// drag to pan the map (or turn the camera in 3D and side view), pinch or wheel to zoom, tap a plane to pick it
+var ptrs = {}, dragFrom = null, moved = 0, pinch0 = 0, zoom0 = 1;
+cv.addEventListener("pointerdown", function (e) {
+  cv.setPointerCapture(e.pointerId); ptrs[e.pointerId] = [e.clientX, e.clientY];
+  var ids = Object.keys(ptrs);
+  if (ids.length === 2) { var a = ptrs[ids[0]], c = ptrs[ids[1]]; pinch0 = Math.hypot(a[0] - c[0], a[1] - c[1]); zoom0 = ZM; }
+  dragFrom = [e.clientX, e.clientY]; moved = 0;
 });
-$("bLogClose").addEventListener("click", function () { $("logSheet").hidden = true; });
-$("bJump").addEventListener("click", function () {
-  var box2 = $("jumps"); box2.innerHTML = "";
-  var home = document.createElement("button"); home.textContent = "Home: " + cfg.name; home.addEventListener("click", function () { jump(cfg.lat, cfg.lon); }); box2.appendChild(home);
-  AIRPORTS.forEach(function (a) { var bt = document.createElement("button"); bt.textContent = a[0] + "  " + a[4]; bt.addEventListener("click", function () { jump(a[2], a[3]); }); box2.appendChild(bt); });
-  $("jumpSheet").hidden = false;
+cv.addEventListener("pointermove", function (e) {
+  if (!ptrs[e.pointerId]) return;
+  ptrs[e.pointerId] = [e.clientX, e.clientY];
+  var ids = Object.keys(ptrs);
+  if (ids.length === 2 && pinch0) { var a = ptrs[ids[0]], c = ptrs[ids[1]]; ZM = clamp(zoom0 * Math.hypot(a[0] - c[0], a[1] - c[1]) / pinch0, 0.08, 14); moved = 99; return; }
+  var dx = e.clientX - dragFrom[0], dy = e.clientY - dragFrom[1]; dragFrom = [e.clientX, e.clientY]; moved += Math.abs(dx) + Math.abs(dy);
+  if (moved < 6) return;
+  if (view === "map") {
+    follow = false;
+    P.lon -= dx / SCALE / ZM / (60 * Math.cos(P.lat * DEG)); P.lat += dy / SCALE / ZM / 60;
+    P.lat = clamp(P.lat, 15, 60); P.lon = clamp(P.lon, -170, -50);
+  } else orbit = (orbit - dx * 0.35 + 360) % 360;
 });
-$("bJumpClose").addEventListener("click", function () { $("jumpSheet").hidden = true; });
-function jump(la, lo) {
-  P.lat = la; P.lon = lo; P.alt = Math.max(P.alt, 6000); $("jumpSheet").hidden = true;
-  if (demoMode) { endDemo(); demoMode = false; startDemo(); }
-  lastFetch = 0; prefetch();
+function endPtr(e) {
+  if (!ptrs[e.pointerId]) return;
+  delete ptrs[e.pointerId];
+  if (Object.keys(ptrs).length) return;
+  if (moved < 6) { // a tap: pick the closest plane drawn near that spot
+    var x = e.clientX / SCALE, y = e.clientY / SCALE, best = null, bd = 16;
+    TAPS.forEach(function (t) { var d = Math.hypot(t[0] - x, t[1] - y); if (d < bd) { bd = d; best = t[2]; } });
+    if (best) select(best); else if (view === "map" && sel) deselect();
+  } else savePrefs();
+  pinch0 = 0;
 }
+cv.addEventListener("pointerup", endPtr); cv.addEventListener("pointercancel", endPtr);
+cv.addEventListener("wheel", function (e) { e.preventDefault(); zoomBy(e.deltaY > 0 ? 1 / 1.2 : 1.2); }, { passive: false });
+addEventListener("keydown", function (e) {
+  if (e.key === "v") cycleView(); if (e.key === "m") cycleStyle(); if (e.key === "+" || e.key === "=") zoomBy(1.4); if (e.key === "-") zoomBy(1 / 1.4);
+  if (e.key === "Escape") { deselect(); $("listSheet").hidden = true; } if (e.key === "l") openList(); if (e.key === "a") $("bAuto").click();
+});
 
 /* ================= boot ================= */
 resize(); addEventListener("resize", resize);
@@ -1090,14 +1177,12 @@ Promise.all([
   fetch("https://cdn.jsdelivr.net/npm/us-atlas@3.0.1/states-10m.json").then(function (r) { return r.json(); }),
   fontsReady
 ]).then(function (res) {
-  var t0 = performance.now();
   buildWorld(topojson.feature(res[0], res[0].objects.land), topojson.feature(res[1], res[1].objects.states));
-  window.__buildMs = Math.round(performance.now() - t0);
   $("loading").hidden = true;
-}).catch(function (e) {
+}).catch(function () {
   $("loading").textContent = "THE MAP DID NOT LOAD. CHECK THE CONNECTION AND RELOAD.";
 });
-fetchTraffic(); prefetch();
+prefetch();
 requestAnimationFrame(frame);
 })();
 </script>
