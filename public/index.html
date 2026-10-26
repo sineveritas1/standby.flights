@@ -127,6 +127,7 @@ input {
   <button data-skin="radar" aria-pressed="false">Radar</button>
   <button data-skin="flap" aria-pressed="false">Board</button>
   <button data-skin="wall" aria-pressed="false">Wall</button>
+  <button id="btnFly">Fly</button>
   <button id="btnFull">Full</button>
   <button id="btnSet">Setup</button>
 </div>
@@ -993,6 +994,7 @@ function openSettings() {
   set.hidden = false;
 }
 $("btnSet").addEventListener("click", openSettings);
+$("btnFly").addEventListener("click", () => { location.href = "fly"; });
 $("btnClose").addEventListener("click", () => { set.hidden = true; });
 $("btnSave").addEventListener("click", () => {
   cfg = sanitize(Object.assign({}, cfg, {

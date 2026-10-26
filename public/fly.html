@@ -1,0 +1,888 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover, user-scalable=no">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="theme-color" content="#000000">
+<title>standby.flights fly</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Silkscreen&display=swap">
+<script src="https://cdn.jsdelivr.net/npm/topojson-client@3.1.0/dist/topojson-client.min.js"></script>
+<style>
+/* standby.flights FLY: a 16-bit flight game over a pixel-art US with the real planes around you.
+   Everything is drawn into a low-res buffer and scaled up without smoothing. */
+:root {
+  --ink: #0b0d18; --panel: rgba(12, 14, 28, 0.86); --line: rgba(255, 255, 255, 0.16);
+  --fg: #f2ecdc; --dim: #9aa0b8; --accent: #ffb000; --hot: #ff5c3a;
+  color-scheme: dark;
+}
+* { box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
+[hidden] { display: none !important; }
+html, body { margin: 0; height: 100%; overflow: hidden; background: var(--ink); }
+body { font-family: Silkscreen, ui-monospace, monospace; color: var(--fg); user-select: none; -webkit-user-select: none; touch-action: none; }
+#cv { position: fixed; inset: 0; width: 100%; height: 100%; display: block; image-rendering: pixelated; image-rendering: crisp-edges; }
+
+/* top buttons */
+#top { position: fixed; top: max(8px, env(safe-area-inset-top, 0px)); right: max(8px, env(safe-area-inset-right, 0px)); display: flex; gap: 6px; z-index: 5; }
+button { font: 12px/1 Silkscreen, monospace; color: var(--fg); background: var(--panel); border: 2px solid var(--line); border-radius: 6px; padding: 8px 6px; min-height: 44px; min-width: 44px; cursor: pointer; }
+button:active, button.on { background: var(--accent); color: #000; border-color: var(--accent); }
+button:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+
+/* control deck */
+#deck { position: fixed; left: 0; right: 0; bottom: 0; z-index: 5; display: flex; justify-content: space-between; align-items: flex-end; gap: 8px;
+  padding: 8px max(8px, env(safe-area-inset-right, 0px)) max(8px, env(safe-area-inset-bottom, 0px)) max(8px, env(safe-area-inset-left, 0px)); pointer-events: none; }
+.pad { display: grid; gap: 6px; pointer-events: auto; }
+.pad.turn { grid-template-columns: 64px 64px; }
+.pad.pitch { grid-template-rows: 56px 56px; }
+.pad.thr { grid-template-columns: 52px; grid-template-rows: 44px 44px 44px; }
+.pad button { font-size: 20px; min-height: 56px; background: rgba(12, 14, 28, 0.62); }
+.pad.thr button { font-size: 13px; min-height: 44px; }
+.mid { display: flex; gap: 8px; align-items: flex-end; pointer-events: none; }
+
+/* sheets: logbook + jump */
+.sheet { position: fixed; inset: 0; z-index: 10; background: rgba(0, 0, 0, 0.72); display: grid; place-items: center; padding: 16px; }
+.card { width: min(460px, 100%); max-height: 100%; overflow: auto; background: #151830; border: 2px solid var(--line); border-radius: 8px; padding: 16px; }
+.card h2 { margin: 0 0 6px; font-size: 18px; color: var(--accent); font-weight: 400; }
+.card p { margin: 0 0 12px; color: var(--dim); font-size: 12px; line-height: 1.5; }
+.list { display: grid; gap: 6px; margin-bottom: 12px; }
+.list button { text-align: left; width: 100%; font-size: 13px; }
+.entry { display: flex; justify-content: space-between; gap: 8px; border-bottom: 1px solid var(--line); padding: 8px 0; font-size: 12px; }
+.entry b { font-weight: 400; color: var(--fg); }
+.entry span { color: var(--dim); text-align: right; }
+.tally { display: flex; flex-wrap: wrap; gap: 6px; margin-bottom: 12px; }
+.tally i { font-style: normal; font-size: 11px; padding: 4px 6px; border-radius: 4px; background: #0b0d18; border: 1px solid var(--line); }
+#loading { position: fixed; inset: 0; display: grid; place-items: center; z-index: 20; background: var(--ink); color: var(--accent); font-size: 14px; letter-spacing: 0.1em; text-align: center; padding: 16px; }
+</style>
+</head>
+<body>
+<canvas id="cv"></canvas>
+<div id="loading">LOADING MAP...</div>
+
+<div id="top">
+  <button id="bView" aria-label="Switch view">SIDE</button>
+  <button id="bZoom" aria-label="Zoom map">ZOOM</button>
+  <button id="bWarp" aria-label="Speed up time">X1</button>
+  <button id="bJump" aria-label="Jump to an airport">GO</button>
+  <button id="bLog" aria-label="Logbook">LOG</button>
+  <button id="bExit" aria-label="Back to the flight board">EXIT</button>
+</div>
+
+<div id="deck">
+  <div class="pad turn">
+    <button data-hold="left" aria-label="Turn left">&#9664;</button>
+    <button data-hold="right" aria-label="Turn right">&#9654;</button>
+  </div>
+  <div class="mid">
+    <div class="pad pitch">
+      <button data-hold="up" aria-label="Climb">&#9650;</button>
+      <button data-hold="down" aria-label="Descend">&#9660;</button>
+    </div>
+    <div class="pad thr">
+      <button data-hold="faster" aria-label="More throttle">THR+</button>
+      <button id="bAuto" aria-label="Level off">LVL</button>
+      <button data-hold="slower" aria-label="Less throttle">THR-</button>
+    </div>
+  </div>
+</div>
+
+<div id="logSheet" class="sheet" hidden>
+  <div class="card" role="dialog" aria-labelledby="logTitle">
+    <h2 id="logTitle">Spotter logbook</h2>
+    <p>Fly within 3 miles and 3,000 feet of a real plane to log it. Demo traffic never counts.</p>
+    <div class="tally" id="tally"></div>
+    <div id="entries"></div>
+    <div class="list"><button id="bLogClose">Close</button></div>
+  </div>
+</div>
+
+<div id="jumpSheet" class="sheet" hidden>
+  <div class="card" role="dialog" aria-labelledby="jumpTitle">
+    <h2 id="jumpTitle">Fly from</h2>
+    <p>Jump to an airport. Real traffic loads around wherever you are.</p>
+    <div class="list" id="jumps"></div>
+    <div class="list"><button id="bJumpClose">Close</button></div>
+  </div>
+</div>
+
+<script>
+(function () {
+"use strict";
+
+/* ================= setup ================= */
+var cfg = { name: "HURRICANE UT", lat: 37.1753, lon: -113.2899 };
+try { var saved = JSON.parse(localStorage.getItem("standby.cfg") || "null"); if (saved) { cfg.name = saved.name || cfg.name; cfg.lat = +saved.lat || cfg.lat; cfg.lon = +saved.lon || cfg.lon; } } catch (e) {}
+
+var cv = document.getElementById("cv"), ctx = cv.getContext("2d");
+var buf = document.createElement("canvas"), b = buf.getContext("2d");
+var BW = 0, BH = 0, SCALE = 1;
+function resize() {
+  var w = innerWidth, h = innerHeight, dpr = Math.min(window.devicePixelRatio || 1, 2);
+  SCALE = Math.min(w, h) / 200;               // the short side of the screen is 200 game pixels
+  BW = Math.ceil(w / SCALE); BH = Math.ceil(h / SCALE);
+  buf.width = BW; buf.height = BH;
+  cv.width = Math.round(w * dpr); cv.height = Math.round(h * dpr);
+  img = b.createImageData(BW, BH);
+}
+var img = null;
+
+var clamp = function (v, a, c) { return v < a ? a : v > c ? c : v; };
+var DEG = Math.PI / 180;
+function hash2(x, y) { var h = (x * 374761393 + y * 668265263) | 0; h = (h ^ (h >>> 13)) * 1274126177 | 0; return ((h ^ (h >>> 16)) >>> 0) / 4294967296; }
+function vnoise(x, y) {
+  var xi = Math.floor(x), yi = Math.floor(y), xf = x - xi, yf = y - yi;
+  var u = xf * xf * (3 - 2 * xf), v = yf * yf * (3 - 2 * yf);
+  var a = hash2(xi, yi), c = hash2(xi + 1, yi), d = hash2(xi, yi + 1), e = hash2(xi + 1, yi + 1);
+  return (a + (c - a) * u) + ((d + (e - d) * u) - (a + (c - a) * u)) * v;
+}
+function fbm(x, y) { return vnoise(x, y) * 0.55 + vnoise(x * 2.1 + 7, y * 2.1 + 3) * 0.3 + vnoise(x * 4.3 + 1, y * 4.3 + 9) * 0.15; }
+function hexRgb(h) { var n = parseInt(h.slice(1), 16); return [(n >> 16) & 255, (n >> 8) & 255, n & 255]; }
+
+/* ================= world map raster =================
+   The lower 48 plus a margin, at 0.04 degrees per cell. Land and US state shapes come from the free
+   world-atlas and us-atlas files; each cell gets a terrain type by region, which sets its colors. */
+var G = { lon0: -130, lat0: 52, step: 0.04, w: 1700, h: 750 };
+var CELL = null;     // terrain type per cell
+var SID = null;      // which US state a cell is in (0 = not the US), for drawing thin borders
+var T = { OCEAN: 0, LAKE: 1, RED: 2, TAN: 3, MTN: 4, FOREST: 5, PNW: 6, PLAINS: 7, FARM: 8, SWAMP: 9, FOREIGN: 10, HILLS: 11, CHAP: 12, BEACH: 13, SNOW: 14, CITY: 15 };
+var PAL = [];
+PAL[T.OCEAN]   = ["#1d4f91", "#215a9e", "#2464a8", "#6fb4e8"];
+PAL[T.LAKE]    = ["#2a6fb4", "#2f7bc0", "#3586c8", "#8fcaf0"];
+PAL[T.RED]     = ["#c8532c", "#b44726", "#d4683a", "#e8a070"];
+PAL[T.TAN]     = ["#d9b27c", "#c99d68", "#e6c493", "#b8875a"];
+PAL[T.MTN]     = ["#7a7262", "#8d8470", "#665f52", "#a89e88"];
+PAL[T.FOREST]  = ["#2f6b3a", "#3a7d44", "#255a30", "#4c8f50"];
+PAL[T.PNW]     = ["#1f4d2f", "#2a5e38", "#183f26", "#3a6e44"];
+PAL[T.PLAINS]  = ["#b9b46a", "#a8a35c", "#c9c47a", "#9a9450"];
+PAL[T.FARM]    = ["#6f9a3e", "#88b04b", "#b8a95a", "#5d8a35"];
+PAL[T.SWAMP]   = ["#4f7a4a", "#5f8a55", "#3f6a42", "#2f7bc0"];
+PAL[T.FOREIGN] = ["#7f8a6c", "#8a9476", "#737e62", "#959e80"];
+PAL[T.HILLS]   = ["#3d6e3c", "#4a7c45", "#335e33", "#5a8a50"];
+PAL[T.CHAP]    = ["#a89a62", "#97895a", "#b8aa72", "#7f8a50"];
+PAL[T.BEACH]   = ["#e8d8a8", "#d8c898", "#f0e4bc", "#c8b888"];
+PAL[T.SNOW]    = ["#eef2f8", "#d7dde8", "#ffffff", "#b8c2d4"];
+PAL[T.CITY]    = ["#8a8a94", "#a0a0aa", "#6e6e78", "#ffe08a"];
+var PALRGB = PAL.map(function (p) { return p.map(hexRgb); });
+
+function segDist(la, lo, a, c) { // degrees, rough, for drawing mountain bands
+  var ax = a[1], ay = a[0], bx = c[1], by = c[0];
+  var dx = bx - ax, dy = by - ay, t = clamp(((lo - ax) * dx + (la - ay) * dy) / (dx * dx + dy * dy), 0, 1);
+  return Math.hypot(lo - (ax + t * dx), la - (ay + t * dy));
+}
+function inEllipse(la, lo, cla, clo, rla, rlo) { var y = (la - cla) / rla, x = (lo - clo) / rlo; return x * x + y * y < 1; }
+var LAKES = [ // rough ovals: the US map files cut the Great Lakes out of the states, so they are filled in here
+  [41.1, -112.55, 0.42, 0.32], [47.7, -88.0, 0.75, 3.4], [47.2, -90.6, 0.35, 1.4], [44.0, -87.0, 1.9, 0.55],
+  [45.6, -86.0, 0.35, 1.0], [44.8, -82.4, 1.0, 0.9], [45.6, -81.0, 0.3, 1.2], [42.2, -81.2, 0.45, 2.1],
+  [43.65, -77.8, 0.3, 1.5], [26.95, -80.8, 0.22, 0.2], [39.1, -120.03, 0.1, 0.06], [36.15, -114.4, 0.08, 0.3], [37.2, -110.9, 0.15, 0.4]
+];
+function terrainUS(la, lo) {
+  var n = fbm(lo * 0.7, la * 0.7), e = (n - 0.5) * 2.2;
+  if (la > 35.6 && la < 49 && lo > -111.6 + e * 0.6 && lo < -104.8 + e * 0.5 && !(la > 41 && la < 43.6 && lo > -109.6 && lo < -106.4)) return n > 0.62 && la > 37 ? T.SNOW : T.MTN;
+  if (segDist(la, lo, [40.3, -121.4], [35.8, -118.3]) < 0.5 + e * 0.15) return n > 0.6 ? T.SNOW : T.MTN;
+  if (lo > -122.5 && lo < -121.2 && la > 40.6 && la < 49) return n > 0.66 ? T.SNOW : T.MTN;
+  if (lo > -112.2 && lo < -109.4 && la > 39.4 && la < 41.9 && (lo > -111.9 + e * 0.2) && !(lo < -111 && la > 40.9)) return T.MTN;
+  if (segDist(la, lo, [34.3, -85.3], [42.3, -74.6]) < 0.9 + e * 0.2 || segDist(la, lo, [42.3, -74.6], [45.4, -70.6]) < 0.8) return T.HILLS;
+  if (la > 35.3 && la < 38.7 + e * 0.3 && lo > -114.3 && lo < -108.4 + e * 0.4) return T.RED;
+  if (lo < -121 && la > 42) return T.PNW;
+  if (lo > -117.2 && lo < -111.4 && la > 44.2 && la < 49) return n > 0.55 ? T.MTN : T.FOREST;
+  if (lo < -119.4 && la < 40.3) { if (lo > -122.1 && la > 35.2 && la < 40.2 && lo < -119.6) return T.FARM; return T.CHAP; }
+  if (lo < -109 && la < 43) return T.TAN;
+  if (lo < -103 && la < 36.2) return T.TAN;
+  if (lo < -100.5 && la < 32.8) return T.TAN;
+  if (lo < -97.6) return T.PLAINS;
+  if (la < 28.6 && lo > -82.8) return T.SWAMP;
+  if (la < 30.6 && lo > -94.5 && lo < -88) return T.SWAMP;
+  if (la > 36.4 && la < 46.2 && lo < -81.6) return T.FARM;
+  return T.FOREST;
+}
+
+function buildWorld(land, states) {
+  var c = document.createElement("canvas"); c.width = G.w; c.height = G.h;
+  var x = c.getContext("2d");
+  var px = function (lo) { return (lo - G.lon0) / G.step; }, py = function (la) { return (G.lat0 - la) / G.step; };
+  function trace(geo) {
+    var polys = geo.type === "Polygon" ? [geo.coordinates] : geo.type === "MultiPolygon" ? geo.coordinates : [];
+    polys.forEach(function (poly) { poly.forEach(function (ring) {
+      ring.forEach(function (p, i) { var X = px(p[0]), Y = py(p[1]); if (i) x.lineTo(X, Y); else x.moveTo(X, Y); });
+      x.closePath();
+    }); });
+  }
+  function fill(fc, color) { x.fillStyle = color; fc.features.forEach(function (f) { x.beginPath(); trace(f.geometry); x.fill("evenodd"); }); }
+  x.fillStyle = "#000"; x.fillRect(0, 0, G.w, G.h);
+  fill(land, "#ff0000");                       // any land
+  fill(states, "#00ff00");                     // US states
+  var a = x.getImageData(0, 0, G.w, G.h).data;
+  x.fillStyle = "#000"; x.fillRect(0, 0, G.w, G.h);
+  states.features.forEach(function (f, n) { x.fillStyle = "rgb(" + (n + 1) + ",0,0)"; x.beginPath(); trace(f.geometry); x.fill("evenodd"); });
+  var s = x.getImageData(0, 0, G.w, G.h).data;
+  CELL = new Uint8Array(G.w * G.h); SID = new Uint8Array(G.w * G.h);
+  for (var j = 0; j < G.h; j++) {
+    var la = G.lat0 - (j + 0.5) * G.step;
+    for (var i = 0; i < G.w; i++) {
+      var k = j * G.w + i, lo = G.lon0 + (i + 0.5) * G.step;
+      var us = a[k * 4 + 1] > 127, anyLand = a[k * 4] > 127 || us;
+      // warp where each cell looks up its region so region edges wander like real landforms
+      var t = !anyLand ? T.OCEAN : !us ? T.FOREIGN : terrainUS(la + (fbm(lo * 0.45 + 11, la * 0.45) - 0.5) * 2.2, lo + (fbm(lo * 0.45, la * 0.45 + 23) - 0.5) * 2.8);
+      for (var q = 0; q < LAKES.length; q++) { var L = LAKES[q]; if (anyLand && inEllipse(la, lo, L[0], L[1], L[2], L[3])) { t = T.LAKE; break; } }
+      CELL[k] = t;
+      if (us) SID[k] = s[k * 4];
+    }
+  }
+  // beaches and coastlines: land cells that touch the ocean
+  for (var jj = 1; jj < G.h - 1; jj++) for (var ii = 1; ii < G.w - 1; ii++) {
+    var kk = jj * G.w + ii, tt = CELL[kk];
+    if (tt === T.OCEAN || tt === T.LAKE) continue;
+    if (CELL[kk - 1] === T.OCEAN || CELL[kk + 1] === T.OCEAN || CELL[kk - G.w] === T.OCEAN || CELL[kk + G.w] === T.OCEAN) CELL[kk] = T.BEACH;
+  }
+  // cities around big airports
+  AIRPORTS.forEach(function (ap) {
+    var ci = Math.round((ap[3] - G.lon0) / G.step), cj = Math.round((G.lat0 - ap[2]) / G.step), r = ap[5] || 3;
+    for (var y = -r; y <= r; y++) for (var xx = -r; xx <= r; xx++) {
+      if (xx * xx + y * y > r * r || hash2(ci + xx, cj + y) < 0.25) continue;
+      var k2 = (cj + y) * G.w + ci + xx;
+      if (k2 >= 0 && k2 < CELL.length && CELL[k2] !== T.OCEAN && CELL[k2] !== T.LAKE) CELL[k2] = T.CITY;
+    }
+  });
+}
+function cellAt(la, lo) {
+  var i = Math.floor((lo - G.lon0) / G.step), j = Math.floor((G.lat0 - la) / G.step);
+  if (i < 0 || j < 0 || i >= G.w || j >= G.h || !CELL) return T.OCEAN;
+  return CELL[j * G.w + i];
+}
+
+/* code, name, lat, lon, place, city radius in cells */
+var AIRPORTS = [
+  ["SGU", "ST GEORGE", 37.036, -113.510, "ST GEORGE UT", 2], ["SLC", "SALT LAKE CITY", 40.788, -111.978, "SALT LAKE CITY UT", 5],
+  ["LAS", "LAS VEGAS", 36.084, -115.154, "LAS VEGAS NV", 5], ["GCN", "GRAND CANYON", 35.952, -112.147, "GRAND CANYON AZ", 0],
+  ["PHX", "PHOENIX", 33.434, -112.012, "PHOENIX AZ", 6], ["LAX", "LOS ANGELES", 33.942, -118.408, "LOS ANGELES CA", 8],
+  ["SAN", "SAN DIEGO", 32.733, -117.190, "SAN DIEGO CA", 4], ["SFO", "SAN FRANCISCO", 37.619, -122.375, "SAN FRANCISCO CA", 5],
+  ["SEA", "SEATTLE", 47.450, -122.309, "SEATTLE WA", 5], ["PDX", "PORTLAND", 45.589, -122.597, "PORTLAND OR", 4],
+  ["BOI", "BOISE", 43.564, -116.223, "BOISE ID", 3], ["DEN", "DENVER", 39.856, -104.674, "DENVER CO", 6],
+  ["ABQ", "ALBUQUERQUE", 35.040, -106.609, "ALBUQUERQUE NM", 3], ["DFW", "DALLAS FT WORTH", 32.897, -97.038, "DALLAS TX", 7],
+  ["IAH", "HOUSTON", 29.984, -95.341, "HOUSTON TX", 7], ["MCI", "KANSAS CITY", 39.298, -94.714, "KANSAS CITY MO", 4],
+  ["MSP", "MINNEAPOLIS", 44.882, -93.222, "MINNEAPOLIS MN", 5], ["STL", "ST LOUIS", 38.749, -90.370, "ST LOUIS MO", 4],
+  ["MSY", "NEW ORLEANS", 29.993, -90.258, "NEW ORLEANS LA", 3], ["ORD", "CHICAGO", 41.979, -87.904, "CHICAGO IL", 8],
+  ["BNA", "NASHVILLE", 36.124, -86.678, "NASHVILLE TN", 4], ["DTW", "DETROIT", 42.212, -83.353, "DETROIT MI", 5],
+  ["ATL", "ATLANTA", 33.640, -84.427, "ATLANTA GA", 6], ["CLT", "CHARLOTTE", 35.214, -80.943, "CHARLOTTE NC", 4],
+  ["MCO", "ORLANDO", 28.429, -81.309, "ORLANDO FL", 4], ["MIA", "MIAMI", 25.796, -80.287, "MIAMI FL", 5],
+  ["DCA", "WASHINGTON", 38.852, -77.038, "WASHINGTON DC", 6], ["JFK", "NEW YORK", 40.640, -73.779, "NEW YORK NY", 9],
+  ["BOS", "BOSTON", 42.366, -71.010, "BOSTON MA", 5]
+];
+
+/* ================= sprites =================
+   Planes are drawn from simple shapes into tiny canvases, then every pixel is snapped to fully on or
+   off and given a dark outline, so they stay crisp pixel art at any heading. */
+function polyMask(w, h, pts, ox, oy, sc, ang) {
+  var c = document.createElement("canvas"); c.width = w; c.height = h;
+  var x = c.getContext("2d"); x.translate(ox, oy); x.rotate(ang || 0);
+  x.beginPath(); pts.forEach(function (p, i) { if (i) x.lineTo(p[0] * sc, p[1] * sc); else x.moveTo(p[0] * sc, p[1] * sc); });
+  x.closePath(); x.fillStyle = "#fff"; x.fill();
+  return x.getImageData(0, 0, w, h).data;
+}
+function mirror(pts) { var out = pts.slice(); for (var i = pts.length - 1; i >= 0; i--) out.push([-pts[i][0], pts[i][1]]); return out; }
+function renderShape(parts, sc, ang, outline) {
+  var ext = 0; parts.forEach(function (p) { p.pts.forEach(function (q) { ext = Math.max(ext, Math.hypot(q[0], q[1])); }); });
+  var size = Math.ceil(ext * sc * 2) + 4, o = size / 2;
+  var out = new Uint8ClampedArray(size * size * 4);
+  parts.forEach(function (p) {
+    var m = polyMask(size, size, p.pts, o, o, sc, ang), rgb = hexRgb(p.c);
+    for (var i = 0; i < m.length; i += 4) if (m[i + 3] >= 120) { out[i] = rgb[0]; out[i + 1] = rgb[1]; out[i + 2] = rgb[2]; out[i + 3] = 255; }
+  });
+  if (outline) {
+    var ol = hexRgb(outline), copy = new Uint8ClampedArray(out);
+    for (var y = 0; y < size; y++) for (var x = 0; x < size; x++) {
+      var k = (y * size + x) * 4; if (copy[k + 3]) continue;
+      var near = (x > 0 && copy[k - 1]) || (x < size - 1 && copy[k + 7]) || (y > 0 && copy[k - size * 4 + 3]) || (y < size - 1 && copy[k + size * 4 + 3]);
+      if (near) { out[k] = ol[0]; out[k + 1] = ol[1]; out[k + 2] = ol[2]; out[k + 3] = 255; }
+    }
+  }
+  var c = document.createElement("canvas"); c.width = size; c.height = size;
+  c.getContext("2d").putImageData(new ImageData(out, size, size), 0, 0);
+  return c;
+}
+
+// top-down shapes, nose up, in units of about one pixel at scale 1
+var TOP = {
+  jet: function (L) { return [
+    { c: L.wing, pts: mirror([[1.4, -1.5], [11, 3.6], [11, 5.2], [1.6, 2.8]]) },
+    { c: L.dark, pts: [[4.6, 0.4], [6.2, 0.4], [6.2, 3.4], [4.6, 3.4]] }, { c: L.dark, pts: [[-6.2, 0.4], [-4.6, 0.4], [-4.6, 3.4], [-6.2, 3.4]] },
+    { c: L.tail, pts: mirror([[1, 8.2], [5, 10.8], [5, 11.8], [1, 10.6]]) },
+    { c: L.body, pts: mirror([[0, -12], [1.4, -10.4], [1.8, -7], [1.8, 8], [1.1, 11.5], [0, 12.4]]) },
+    { c: L.tail, pts: [[-0.5, 8], [0.5, 8], [0.5, 12.4], [-0.5, 12.4]] },
+    { c: L.glass, pts: [[-1, -9.6], [1, -9.6], [1, -8.4], [-1, -8.4]] }
+  ]; },
+  heavy: function (L) { var s = TOP.jet(L); s.splice(1, 0, { c: L.dark, pts: [[7.6, 2.0], [9.0, 2.0], [9.0, 4.6], [7.6, 4.6]] }, { c: L.dark, pts: [[-9.0, 2.0], [-7.6, 2.0], [-7.6, 4.6], [-9.0, 4.6]] }); return s; },
+  biz: function (L) { return [
+    { c: L.wing, pts: mirror([[1, 0], [6.5, 3.4], [6.5, 4.4], [1, 3]]) },
+    { c: L.tail, pts: mirror([[0.8, 6.4], [3.4, 8.2], [3.4, 9], [0.8, 8.4]]) },
+    { c: L.body, pts: mirror([[0, -7.5], [1.1, -6], [1.3, 6], [0.8, 8.6], [0, 9]]) },
+    { c: L.dark, pts: [[1.2, 4], [2.4, 4], [2.4, 6], [1.2, 6]] }, { c: L.dark, pts: [[-2.4, 4], [-1.2, 4], [-1.2, 6], [-2.4, 6]] },
+    { c: L.glass, pts: [[-0.8, -5.6], [0.8, -5.6], [0.8, -4.6], [-0.8, -4.6]] }
+  ]; },
+  prop: function (L) { return [
+    { c: L.wing, pts: mirror([[0.6, -2], [7, -2], [7, -0.4], [0.6, -0.4]]) },
+    { c: L.tail, pts: mirror([[0.5, 4.6], [2.8, 4.6], [2.8, 5.6], [0.5, 5.6]]) },
+    { c: L.body, pts: mirror([[0, -5], [0.9, -4], [0.8, 5.8], [0, 6]]) },
+    { c: L.dark, pts: [[-1.8, -5.6], [1.8, -5.6], [1.8, -5.1], [-1.8, -5.1]] }
+  ]; },
+  heli: function (L) { return [
+    { c: L.body, pts: mirror([[0, -3.4], [1.6, -2.4], [1.6, 1.6], [0.5, 2.6], [0.4, 7], [0, 7.2]]) },
+    { c: L.tail, pts: [[-1.4, 6.4], [1.4, 6.4], [1.4, 7.2], [-1.4, 7.2]] },
+    { c: L.glass, pts: [[-1, -2.8], [1, -2.8], [1, -1.6], [-1, -1.6]] },
+    { c: L.dark, pts: [[-6.5, -0.3], [6.5, -0.3], [6.5, 0.3], [-6.5, 0.3]] },
+    { c: L.dark, pts: [[-0.3, -6.5], [0.3, -6.5], [0.3, 5.5], [-0.3, 5.5]] }
+  ]; },
+  fighter: function (L) { return [
+    { c: L.wing, pts: mirror([[0.8, -3], [6.4, 4], [6.4, 5], [1.2, 4.6]]) },
+    { c: L.tail, pts: mirror([[0.8, 5.4], [3.2, 7.6], [3.2, 8.4], [0.8, 7.8]]) },
+    { c: L.body, pts: mirror([[0, -9.5], [0.8, -6], [1.3, 0], [1.3, 8.4], [0, 8.8]]) },
+    { c: L.glass, pts: [[-0.5, -6], [0.5, -6], [0.5, -3.6], [-0.5, -3.6]] }
+  ]; }
+};
+// side shapes, nose to the right
+var SIDE = {
+  jet: function (L) { return [
+    { c: L.tail, pts: [[-12, -1.4], [-11.6, -7], [-9.8, -7], [-7.6, -1.4]] },
+    { c: L.body, pts: [[-12.4, -1.4], [-9, -1.8], [8, -1.8], [10.6, -1.3], [12.2, 0.2], [11.2, 1.3], [8, 1.8], [-8, 1.8], [-11.6, 0.2]] },
+    { c: L.belly, pts: [[-8, 0.7], [8.6, 0.7], [11.6, 0.7], [11.2, 1.3], [8, 1.8], [-8, 1.8], [-10.6, 0.7]] },
+    { c: L.stripe, pts: [[-10.6, 0.1], [11.4, 0.1], [11.6, 0.6], [-10.8, 0.6]] },
+    { c: L.wing, pts: [[-3, 0.9], [3.2, 0.7], [3.2, 1.5], [-3.6, 1.9]] },
+    { c: L.dark, pts: [[0.2, 1.6], [4, 1.6], [4.2, 3], [0.2, 3]] },
+    { c: L.tail2, pts: [[-12.8, -0.6], [-9.4, -0.7], [-9.4, 0], [-12.8, 0.1]] },
+    { c: L.glass, pts: [[9.4, -1.3], [10.9, -1.0], [11.3, -0.4], [9.4, -0.5]] }
+  ]; },
+  heavy: function (L) { return SIDE.jet(L); },
+  biz: function (L) { return [
+    { c: L.tail, pts: [[-6.6, -0.8], [-6.6, -4.6], [-5.2, -4.6], [-3.8, -0.8]] },
+    { c: L.body, pts: [[-7, -0.8], [5, -1.2], [7, -0.2], [6.4, 0.8], [-6, 1], [-7, 0.2]] },
+    { c: L.stripe, pts: [[-6.6, 0.1], [6.8, 0.1], [6.6, 0.5], [-6.6, 0.5]] },
+    { c: L.dark, pts: [[-5.4, -1.6], [-2.6, -1.6], [-2.6, -0.4], [-5.4, -0.4]] },
+    { c: L.glass, pts: [[4.6, -0.9], [5.9, -0.6], [6.2, -0.2], [4.6, -0.3]] }
+  ]; },
+  prop: function (L) { return [
+    { c: L.tail, pts: [[-4.6, -0.6], [-4.6, -3.2], [-3.4, -3.2], [-2.6, -0.6]] },
+    { c: L.wing, pts: [[-1.4, -1.6], [1.8, -1.6], [1.8, -1.0], [-1.4, -1.0]] },
+    { c: L.body, pts: [[-4.8, -0.6], [-1, -1], [3, -1], [4.2, -0.2], [3.8, 0.8], [-1, 1], [-4.8, 0.1]] },
+    { c: L.glass, pts: [[1.2, -0.9], [2.6, -0.9], [2.6, -0.2], [1.2, -0.2]] },
+    { c: L.dark, pts: [[4.3, -1.8], [4.7, -1.8], [4.7, 1.6], [4.3, 1.6]] },
+    { c: L.dark, pts: [[0, 1], [0.4, 1], [0.4, 1.8], [0, 1.8]] }
+  ]; },
+  heli: function (L) { return [
+    { c: L.dark, pts: [[-5.6, -3.2], [5.6, -3.2], [5.6, -2.7], [-5.6, -2.7]] },
+    { c: L.dark, pts: [[-0.3, -3], [0.3, -3], [0.3, -1.6], [-0.3, -1.6]] },
+    { c: L.body, pts: [[-1.8, -1.6], [1.6, -1.6], [3, -0.4], [2.4, 1.2], [-1.6, 1.2]] },
+    { c: L.body, pts: [[-6.4, -0.8], [-1.6, -0.8], [-1.6, 0.2], [-6.4, 0]] },
+    { c: L.tail, pts: [[-6.8, -2], [-5.8, -2], [-5.8, 0.4], [-6.8, 0.4]] },
+    { c: L.glass, pts: [[0.8, -1.3], [2.4, -0.3], [1.2, -0.2]] },
+    { c: L.dark, pts: [[-1.6, 1.6], [2.2, 1.6], [2.2, 2], [-1.6, 2]] }
+  ]; },
+  fighter: function (L) { return [
+    { c: L.tail, pts: [[-6.4, -0.6], [-6.2, -4.2], [-4.6, -4.2], [-3.4, -0.6]] },
+    { c: L.body, pts: [[-6.8, -0.6], [3, -0.9], [7.6, 0], [3, 0.8], [-6.8, 0.8]] },
+    { c: L.wing, pts: [[-4.4, 0.3], [1, 0.3], [-3.4, 1.4], [-5, 1.4]] },
+    { c: L.glass, pts: [[1, -0.9], [3.6, -0.6], [2.6, -1.6], [1.4, -1.6]] }
+  ]; }
+};
+function livery(kind, code, player) {
+  var h = 0; for (var i = 0; i < (code || "").length; i++) h = (h * 31 + code.charCodeAt(i)) % 360;
+  var tail = player ? "#2a5bd7" : "hsl(" + h + ",70%,48%)";
+  var L = { body: "#f4f6fa", belly: "#c9d1e0", wing: "#c3cbdb", dark: "#56607a", glass: "#22305a", tail: tail, tail2: tail, stripe: tail };
+  if (kind === "MIL") { L.body = "#8d978a"; L.belly = "#76806f"; L.wing = "#6f7a68"; L.tail = L.tail2 = L.stripe = "#5e6858"; L.glass = "#c8d878"; }
+  else if (kind === "CARGO") { L.tail = L.tail2 = L.stripe = "#e8a020"; L.body = "#eef0f4"; }
+  else if (kind === "GOV") { L.tail = L.tail2 = "#2e6a46"; L.stripe = "#c83a2a"; }
+  else if (kind === "PRIVATE" || kind === "BIZJET") { L.stripe = tail; L.belly = "#e2e6ee"; }
+  return L;
+}
+// hsl() colors need converting before pixel snapping
+function toHex(c) { if (c[0] === "#") return c; var x = document.createElement("canvas").getContext("2d"); x.fillStyle = c; return x.fillStyle; }
+function fixLivery(L) { var o = {}; for (var k in L) o[k] = toHex(L[k]); return o; }
+
+var SPR = {};
+function shapeFor(kind, cat, type) {
+  if (kind === "HELI") return "heli";
+  if (kind === "MIL" && /^(F\d|FA|EUFI|TOR|T38|A10|F35|F15|F16|F18)/.test(type || "")) return "fighter";
+  if (cat === "A5" || /^(B74|B77|B78|A33|A35|A38|B76|MD11|C17|C5)/.test(type || "")) return "heavy";
+  if (cat === "A1" || /^(C1\d\d|C2\d\d|P28|PA\d|SR2|BE\d|DA4|M20|C208)/.test(type || "")) return "prop";
+  if (cat === "A2" || kind === "BIZJET") return "biz";
+  return "jet";
+}
+var DIRS = 32;
+function topSprite(shape, kind, code, sc, hdg, player) {
+  var d = Math.round(((hdg % 360) + 360) % 360 / (360 / DIRS)) % DIRS;
+  var key = "t" + shape + kind + (player ? "P" : (code || "").slice(0, 3)) + sc + "/" + d;
+  if (!SPR[key]) SPR[key] = renderShape(TOP[shape](fixLivery(livery(kind, code, player))), sc, d * (2 * Math.PI / DIRS), "#141a2e");
+  return SPR[key];
+}
+function shadowSprite(shape, sc, hdg) {
+  var d = Math.round(((hdg % 360) + 360) % 360 / (360 / DIRS)) % DIRS, key = "s" + shape + sc + "/" + d;
+  if (!SPR[key]) { var parts = TOP[shape](fixLivery(livery("", "", true))).map(function (p) { return { c: "#000000", pts: p.pts }; }); SPR[key] = renderShape(parts, sc, d * (2 * Math.PI / DIRS), null); }
+  return SPR[key];
+}
+function sideSprite(shape, kind, code, sc, flip, pitch, player) {
+  var pq = Math.round(pitch * 2) / 2;
+  var key = "s" + shape + kind + (player ? "P" : (code || "").slice(0, 3)) + sc + (flip ? "L" : "R") + pq;
+  if (!SPR[key]) {
+    var parts = SIDE[shape](fixLivery(livery(kind, code, player)));
+    if (flip) parts = parts.map(function (p) { return { c: p.c, pts: p.pts.map(function (q) { return [-q[0], q[1]]; }) }; });
+    var c = renderShape(parts, sc, (flip ? 1 : -1) * pq * 6 * DEG, "#141a2e");
+    if (shape === "jet" || shape === "heavy") { // cabin windows
+      var x = c.getContext("2d"), o = c.width / 2; x.fillStyle = "#3a4a7a";
+      for (var u = -7.5; u <= 7.5; u += 1.6) { var wx = Math.round(o + (flip ? -u : u) * sc), wy = Math.round(o - 0.9 * sc + (flip ? -1 : 1) * -u * Math.sin(pq * 6 * DEG) * sc); x.fillRect(wx, wy, 1, 1); }
+    }
+    SPR[key] = c;
+  }
+  return SPR[key];
+}
+
+/* ================= classify real planes ================= */
+var CARGO = /^(FDX|UPS|GTI|ABX|ATN|CKS|PAC|NCR|KAL\d{3}9|CLX|BOX|GEC|MXY9|AJT|WGN|SRR|KFS|CAO)/;
+var BIZ = /^(EJA|LXJ|XOJ|JRE|TFF|VJT|EJM|FLX|GAJ|LEA|PJS|CNS|NJE|JAS|WSN|KOW)/;
+var GOVOP = /(GOVERNMENT|DEPARTMENT|DEPT|POLICE|SHERIFF|STATE OF|COUNTY|CITY OF|CUSTOMS|BORDER|FEDERAL|NASA|FOREST SERVICE|HIGHWAY PATROL|FAA|NOAA|MARSHALS|FBI|INTERIOR|AGRICULTURE)/;
+var HELI_T = /^(EC\d|AS\d|B06|B07|B2|B4|R22|R44|R66|H\d|S76|S92|AW\d|A109|A119|A139|MD\d{2}|BK17|UH\d|EH\d)/;
+function kindOf(a) {
+  var call = (a.flight || "").trim().toUpperCase(), t = (a.t || "").toUpperCase(), op = (a.ownOp || "").toUpperCase();
+  if ((a.dbFlags | 0) & 1) return "MIL";
+  if (GOVOP.test(op)) return "GOV";
+  if (a.category === "A7" || HELI_T.test(t)) return "HELI";
+  if (CARGO.test(call)) return "CARGO";
+  if (BIZ.test(call)) return "BIZJET";
+  if (/^[A-Z]{3}\d/.test(call)) return "AIRLINE";
+  if (a.category === "A2" || /^(C25|C5\d|C6|C7|CL\d|GLF|GLEX|E55P|E50P|LJ|PC24|FA\d|H25|HDJT|SF50)/.test(t)) return "BIZJET";
+  return "PRIVATE";
+}
+var KIND_COL = { AIRLINE: "#7fb0ff", CARGO: "#ffb000", MIL: "#9fd36a", GOV: "#ff7a5c", BIZJET: "#c79bff", PRIVATE: "#f2ecdc", HELI: "#5fe0d0" };
+
+/* ================= player + traffic state ================= */
+var P = { lat: cfg.lat, lon: cfg.lon, alt: 9500, hdg: 90, spd: 260, thr: 260, vs: 0, dist: 0 };
+try { var last = JSON.parse(localStorage.getItem("standby.fly") || "null"); if (last && isFinite(last.lat)) { P.lat = last.lat; P.lon = last.lon; P.alt = last.alt; P.hdg = last.hdg; } } catch (e) {}
+var view = "map", zooms = [0.12, 0.45, 1.6, 4], zoomI = 2, warps = [1, 4, 16, 64], warpI = 0;
+var hold = {};
+var traffic = new Map();            // hex -> plane
+var live = false, demoMode = false, lastFetch = 0, fetchErrs = 0, tileKey = "";
+var spotted = {}; try { spotted = JSON.parse(localStorage.getItem("standby.spotted") || "{}") || {}; } catch (e) {}
+var banner = null;
+
+function nmTo(la, lo) { var dy = (la - P.lat) * 60, dx = (lo - P.lon) * 60 * Math.cos(P.lat * DEG); return { dx: dx, dy: dy, d: Math.hypot(dx, dy) }; }
+function move(la, lo, hdg, nm) { var t = hdg * DEG; la += nm * Math.cos(t) / 60; lo += nm * Math.sin(t) / (60 * Math.cos(la * DEG)); return [la, lo]; }
+
+async function fetchTraffic() {
+  // A 1 degree grid with a 100 NM radius: the relay caches each square, so flying around stays polite
+  var la = Math.round(P.lat), lo = Math.round(P.lon), key = la + "," + lo;
+  lastFetch = Date.now();
+  try {
+    var ctl = typeof AbortController !== "undefined" ? new AbortController() : null;
+    var timer = setTimeout(function () { if (ctl) ctl.abort(); }, 20000);
+    var r = await fetch("api/planes?lat=" + la + "&lon=" + lo + "&r=100", { cache: "no-store", signal: ctl ? ctl.signal : undefined });
+    clearTimeout(timer);
+    var j = await r.json();
+    if (!r.ok || !j.ac) throw new Error(j.error || ("HTTP " + r.status));
+    var now = Date.now();
+    j.ac.forEach(function (a) {
+      if (typeof a.lat !== "number" || typeof a.lon !== "number") return;
+      var hex = String(a.hex).toLowerCase();
+      var call = (a.flight || "").trim().toUpperCase();
+      traffic.set(hex, {
+        hex: hex, call: call || (a.r || "").toUpperCase() || hex.toUpperCase(), reg: (a.r || "").toUpperCase(), type: (a.t || "").toUpperCase(),
+        desc: (a.desc || "").toUpperCase(), kind: kindOf(a), cat: a.category || "",
+        lat: a.lat, lon: a.lon, alt: a.alt_baro === "ground" ? 0 : (typeof a.alt_baro === "number" ? a.alt_baro : (typeof a.alt_geom === "number" ? a.alt_geom : 0)),
+        gs: typeof a.gs === "number" ? a.gs : 0, trk: typeof a.track === "number" ? a.track : 0, vr: typeof a.baro_rate === "number" ? a.baro_rate : 0,
+        t: now - (typeof a.seen_pos === "number" ? a.seen_pos * 1000 : 0), demo: false
+      });
+    });
+    if (j.ac.length) { live = true; fetchErrs = 0; if (demoMode) endDemo(); }
+    tileKey = key;
+  } catch (e) {
+    fetchErrs++;
+    if (!live || fetchErrs > 2) startDemo();
+  }
+}
+// drop planes nobody has heard from in 5 minutes
+function prune() { var now = Date.now(); traffic.forEach(function (p, k) { if (!p.demo && now - p.t > 300000) traffic.delete(k); }); }
+
+/* demo traffic: clearly labeled, never logged */
+var DEMO = [["SWA2381", "B38M", "AIRLINE", "A3"], ["DAL1442", "A321", "AIRLINE", "A3"], ["UAL617", "B789", "AIRLINE", "A5"], ["FDX1802", "B763", "CARGO", "A5"],
+  ["N172SP", "C172", "PRIVATE", "A1"], ["EJA588", "C68A", "BIZJET", "A2"], ["RCH402", "C17", "MIL", "A5"], ["N911UT", "EC35", "HELI", "A7"], ["SKW3304", "E75L", "AIRLINE", "A3"], ["AAL2210", "A21N", "AIRLINE", "A3"]];
+function startDemo() {
+  if (demoMode) return; demoMode = true;
+  for (var i = 0; i < 10; i++) spawnDemo(i);
+}
+function spawnDemo(i) {
+  var d = DEMO[i % DEMO.length], ang = Math.random() * 360, r = 6 + Math.random() * 60, pos = move(P.lat, P.lon, ang, r);
+  var slow = d[3] === "A1" || d[3] === "A7";
+  traffic.set("demo" + i, { hex: "demo" + i, call: d[0], reg: "", type: d[1], desc: "", kind: d[2], cat: d[3], lat: pos[0], lon: pos[1],
+    alt: slow ? 3000 + Math.random() * 6000 : 18000 + Math.random() * 20000, gs: slow ? 110 + Math.random() * 60 : 380 + Math.random() * 100,
+    trk: Math.random() * 360, vr: 0, t: Date.now(), demo: true, idx: i });
+}
+function endDemo() { demoMode = false; traffic.forEach(function (p, k) { if (p.demo) traffic.delete(k); }); }
+function where(p, now) { // dead-reckon along track for up to 5 minutes
+  var age = Math.min(300, (now - p.t) / 1000), pos = move(p.lat, p.lon, p.trk, p.gs * age / 3600);
+  return { lat: pos[0], lon: pos[1], alt: Math.max(0, p.alt + p.vr * age / 60 * (age < 90 ? 1 : 0)) };
+}
+
+/* ================= simulation ================= */
+var lastT = performance.now();
+function step(now) {
+  var dt = Math.min(0.1, (now - lastT) / 1000); lastT = now;
+  var warp = warps[warpI];
+  if (hold.left) P.hdg -= 4 * dt * 60 / 20; if (hold.right) P.hdg += 4 * dt * 60 / 20;
+  P.hdg = (P.hdg + 360) % 360;
+  if (hold.faster) P.thr = Math.min(560, P.thr + 60 * dt); if (hold.slower) P.thr = Math.max(90, P.thr - 60 * dt);
+  P.spd += clamp(P.thr - P.spd, -15 * dt, 15 * dt);
+  var target = hold.up ? 2500 : hold.down ? -2500 : 0;
+  P.vs += clamp(target - P.vs, -3000 * dt, 3000 * dt);
+  P.alt = clamp(P.alt + P.vs / 60 * dt * warp, 500, 45000);
+  if (P.alt <= 500 || P.alt >= 45000) P.vs = 0;
+  var nm = P.spd / 3600 * dt * warp, pos = move(P.lat, P.lon, P.hdg, nm);
+  P.lat = clamp(pos[0], 18, 55); P.lon = clamp(pos[1], -135, -60); P.dist += nm;
+  // demo planes that wander off come back near the player
+  var wall = Date.now();
+  traffic.forEach(function (p) { if (!p.demo) return; var w = where(p, wall), r = nmTo(w.lat, w.lon); if (r.d > 80) spawnDemo(p.idx); });
+  checkSpots(wall);
+}
+function checkSpots(now) {
+  traffic.forEach(function (p) {
+    if (p.demo || spotted[p.hex]) return;
+    var w = where(p, now), r = nmTo(w.lat, w.lon);
+    if (r.d < 2.6 && Math.abs(w.alt - P.alt) < 3000) {
+      spotted[p.hex] = { call: p.call, type: p.type, desc: p.desc, kind: p.kind, when: now, near: nearestAirport()[0] };
+      try { localStorage.setItem("standby.spotted", JSON.stringify(spotted)); } catch (e) {}
+      banner = { text: "SPOTTED " + p.call, sub: (p.type || "UNKNOWN") + "  " + p.kind, until: now + 4000, col: KIND_COL[p.kind] };
+    }
+  });
+}
+function nearestAirport() {
+  var best = null, bd = 1e9;
+  AIRPORTS.forEach(function (a) { var r = nmTo(a[2], a[3]); if (r.d < bd) { bd = r.d; best = a; } });
+  return [best ? best[0] : "", bd, best];
+}
+
+/* ================= drawing helpers ================= */
+function text(s, x, y, col, align) {
+  b.font = "8px Silkscreen, monospace"; b.textBaseline = "top";
+  var w = b.measureText(s).width; if (align === "right") x -= w; else if (align === "center") x -= w / 2;
+  b.fillStyle = "rgba(0,0,0,0.65)"; b.fillText(s, Math.round(x) + 1, Math.round(y) + 1);
+  b.fillStyle = col; b.fillText(s, Math.round(x), Math.round(y));
+  return w;
+}
+function box(x, y, w, h) { b.fillStyle = "rgba(10,12,26,0.78)"; b.fillRect(x, y, w, h); b.fillStyle = "rgba(255,255,255,0.18)"; b.fillRect(x, y, w, 1); b.fillRect(x, y + h - 1, w, 1); b.fillRect(x, y, 1, h); b.fillRect(x + w - 1, y, 1, h); }
+function dirName(h) { return ["N", "NE", "E", "SE", "S", "SW", "W", "NW"][Math.round(((h % 360) + 360) % 360 / 45) % 8]; }
+function fmtAlt(a) { return a >= 18000 ? "FL" + Math.round(a / 100) : (Math.round(a / 100) * 100).toLocaleString("en-US") + "FT"; }
+
+/* ================= MAP VIEW ================= */
+function drawMap(now) {
+  var z = zooms[zoomI], cx = BW / 2, cy = BH / 2 + 6, cosl = Math.cos(P.lat * DEG);
+  var d = img.data, k = 0;
+  var lat0 = P.lat + cy / z / 60, dLat = 1 / z / 60, dLon = 1 / z / (60 * cosl), lon0 = P.lon - cx / z / (60 * cosl);
+  var gx0 = Math.floor(P.lon * 60 * cosl * z) - Math.floor(cx), gy0 = Math.floor(P.lat * 60 * z) + Math.floor(cy);
+  var waveT = Math.floor(now / 600);
+  // a border pixel is one whose state differs from the pixel to its left or above (state or Canada/Mexico)
+  if (!drawMap.up || drawMap.up.length !== BW) drawMap.up = new Int16Array(BW);
+  var up = drawMap.up, showBorders = z >= 0.4;
+  for (var y = 0; y < BH; y++) {
+    var la = lat0 - y * dLat, j = Math.floor((G.lat0 - la) / G.step), row = j * G.w;
+    var inRow = j >= 0 && j < G.h, left = -1;
+    for (var x = 0; x < BW; x++, k += 4) {
+      var lo = lon0 + x * dLon, i = Math.floor((lo - G.lon0) / G.step), t = T.OCEAN, sid = -1;
+      if (inRow && i >= 0 && i < G.w) { t = CELL[row + i]; sid = SID[row + i]; if (!sid) sid = t === T.FOREIGN ? 255 : -1; }
+      var edge = showBorders && sid > 0 && ((left > 0 && left !== sid) || (y > 0 && up[x] > 0 && up[x] !== sid));
+      left = sid; up[x] = sid;
+      var h = hash2(gx0 + x, gy0 - y), shade = h < 0.5 ? 0 : h < 0.78 ? 1 : h < 0.96 ? 2 : 3;
+      if (t === T.OCEAN || t === T.LAKE) shade = h < 0.6 ? 0 : h < 0.9 ? 1 : (hash2(gx0 + x + waveT, gy0 - y) > 0.985 ? 3 : 2);
+      if (t === T.FARM && z >= 1) { var fx = Math.floor((gx0 + x) / (z * 1.4)), fy = Math.floor((gy0 - y) / (z * 1.4)); shade = Math.floor(hash2(fx, fy) * 3); if (h > 0.93) shade = 3; }
+      var c = PALRGB[t][shade];
+      if (edge) { d[k] = 250; d[k + 1] = 240; d[k + 2] = 214; }
+      else { d[k] = c[0]; d[k + 1] = c[1]; d[k + 2] = c[2]; }
+      d[k + 3] = 255;
+    }
+  }
+  b.putImageData(img, 0, 0);
+  var toScr = function (la2, lo2) { return [cx + (lo2 - P.lon) * 60 * cosl * z, cy - (la2 - P.lat) * 60 * z]; };
+
+  // airports
+  AIRPORTS.forEach(function (a) {
+    var s = toScr(a[2], a[3]); if (s[0] < -30 || s[0] > BW + 30 || s[1] < -20 || s[1] > BH + 20) return;
+    var rl = Math.max(3, Math.round(2.2 * z));
+    b.fillStyle = "#3a3d48"; b.fillRect(Math.round(s[0] - rl), Math.round(s[1]) - 1, rl * 2, 3);
+    b.fillStyle = "#e8e8ee"; for (var q = -rl + 1; q < rl - 1; q += 3) b.fillRect(Math.round(s[0] + q), Math.round(s[1]), 1, 1);
+    if (z >= 0.4) text(a[0], s[0], s[1] + 4, "#ffe08a", "center");
+  });
+
+  // clouds and their shadows, world-anchored
+  var cell = 9, ccx = Math.floor(P.lon * 60 * cosl / cell), ccy = Math.floor(P.lat * 60 / cell), span = Math.ceil(Math.max(BW, BH) / z / cell / 2) + 1;
+  if (z >= 0.4 && span < 40) {
+    for (var gy = ccy - span; gy <= ccy + span; gy++) for (var gx = ccx - span; gx <= ccx + span; gx++) {
+      var hc = hash2(gx * 7 + 3, gy * 13 + 1); if (hc < 0.9) continue;
+      var wx = (gx + hash2(gx, gy)) * cell, wy = (gy + hash2(gy, gx)) * cell;
+      var sx = cx + (wx - P.lon * 60 * cosl) * z, sy = cy - (wy - P.lat * 60) * z, rr = (1.2 + (hc - 0.9) * 14) * z;
+      if (sx < -rr * 3 || sx > BW + rr * 3 || sy < -rr * 3 || sy > BH + rr * 3) continue;
+      var lift = P.alt < 8000 ? 0 : 1;
+      b.fillStyle = "rgba(0,0,20,0.18)"; puff(sx + 4 + lift * 2, sy + 4, rr);
+      b.fillStyle = "rgba(255,255,255," + (P.alt > 8000 ? 0.82 : 0.6) + ")"; puff(sx, sy, rr);
+    }
+  }
+
+  // traffic
+  var list = visible(now), labels = 0;
+  list.forEach(function (p) {
+    var s = toScr(p.w.lat, p.w.lon);
+    if (s[0] < -20 || s[0] > BW + 20 || s[1] < -20 || s[1] > BH + 20) return;
+    var shape = shapeFor(p.kind, p.cat, p.type), sc = z >= 1.6 ? 0.55 : 0.4;
+    var sp = topSprite(shape, p.kind, p.call, sc, p.trk, false);
+    b.drawImage(sp, Math.round(s[0] - sp.width / 2), Math.round(s[1] - sp.height / 2));
+    if (labels < 8 && z >= 0.45) { labels++; text(p.call, s[0] + 7, s[1] - 9, p.demo ? "#9aa0b8" : KIND_COL[p.kind]); if (z >= 1.6) text(fmtAlt(p.w.alt), s[0] + 7, s[1] - 1, "#c8cde0"); }
+  });
+
+  // player: shadow offset by altitude, then the plane
+  var psc = z >= 1.6 ? 1 : 0.75, off = Math.min(14, 2 + P.alt / 3500);
+  var sh = shadowSprite("jet", psc, P.hdg); b.globalAlpha = 0.28; b.drawImage(sh, Math.round(cx - sh.width / 2 + off), Math.round(cy - sh.height / 2 + off)); b.globalAlpha = 1;
+  var me = topSprite("jet", "AIRLINE", "", psc, P.hdg, true); b.drawImage(me, Math.round(cx - me.width / 2), Math.round(cy - me.height / 2));
+  hud(now, list);
+}
+function puff(x, y, r) { b.beginPath(); b.arc(Math.round(x), Math.round(y), r, 0, Math.PI * 2); b.arc(Math.round(x + r * 0.9), Math.round(y + r * 0.2), r * 0.8, 0, Math.PI * 2); b.arc(Math.round(x - r * 0.9), Math.round(y + r * 0.3), r * 0.7, 0, Math.PI * 2); b.fill(); }
+
+function visible(now) {
+  var out = [];
+  traffic.forEach(function (p) { var w = where(p, now), r = nmTo(w.lat, w.lon); if (r.d < 160) out.push({ p: p, w: w, r: r }); });
+  out.sort(function (a, c) { return a.r.d - c.r.d; });
+  return out.map(function (o) { var p = o.p; return { hex: p.hex, call: p.call, type: p.type, kind: p.kind, cat: p.cat, trk: p.trk, gs: p.gs, demo: p.demo, w: o.w, r: o.r }; });
+}
+
+/* ================= SIDE VIEW =================
+   A 16-bit side-scroller. The ground ahead is read from the real map along your heading, so a coast,
+   a mountain range or a city really is coming up when it scrolls in. */
+function skyColors() {
+  var hr = new Date().getHours() + new Date().getMinutes() / 60;
+  if (hr < 5.5 || hr >= 20.5) return { bands: ["#060818", "#0b1030", "#141a44", "#1e2658"], stars: true, sun: false };
+  if (hr < 7.5) return { bands: ["#2a3a78", "#6a5a9a", "#d87a7a", "#f8b070"], stars: false, sun: true, low: true };
+  if (hr >= 18.5) return { bands: ["#26306e", "#7a4a8a", "#e0705a", "#ffb060"], stars: false, sun: true, low: true };
+  return { bands: ["#2f6fd0", "#4a8ae0", "#6aa8ee", "#a8d4f8"], stars: false, sun: true };
+}
+function drawSide(now) {
+  var sky = skyColors(), groundY = BH - 34, n = sky.bands.length;
+  // dithered sky bands
+  for (var i = 0; i < n; i++) {
+    var y0 = Math.floor(groundY * i / n), y1 = Math.floor(groundY * (i + 1) / n);
+    b.fillStyle = sky.bands[i]; b.fillRect(0, y0, BW, y1 - y0);
+    if (i < n - 1) { b.fillStyle = sky.bands[i + 1]; for (var yy = y1 - 3; yy < y1; yy++) for (var xx = (yy & 1); xx < BW; xx += 2) b.fillRect(xx, yy, 1, 1); }
+  }
+  if (sky.stars) { b.fillStyle = "#e8ecff"; for (var s = 0; s < 70; s++) { var sx = Math.floor(hash2(s, 1) * BW), sy = Math.floor(hash2(s, 2) * groundY * 0.8); if (hash2(s, Math.floor(now / 900)) > 0.1) b.fillRect(sx, sy, 1, 1); } }
+  if (sky.sun) { var sunY = sky.low ? groundY - 46 : 26; b.fillStyle = sky.low ? "#ffd08a" : "#fff4c0"; b.beginPath(); b.arc(BW * 0.78, sunY, 9, 0, Math.PI * 2); b.fill(); }
+  else { b.fillStyle = "#f0f0ff"; b.beginPath(); b.arc(BW * 0.8, 26, 6, 0, Math.PI * 2); b.fill(); b.fillStyle = sky.bands[0]; b.beginPath(); b.arc(BW * 0.8 + 3, 24, 5, 0, Math.PI * 2); b.fill(); }
+
+  var pxPerNM = BW / 90, playerX = Math.round(BW * 0.3);
+  var scroll = P.dist;
+
+  // clouds (two parallax layers)
+  [[0.15, "rgba(255,255,255,0.55)", 0.35], [0.5, "rgba(255,255,255,0.85)", 0.6]].forEach(function (L) {
+    var off = scroll * pxPerNM * L[0];
+    for (var c = -1; c < BW / 40 + 2; c++) {
+      var id = Math.floor(off / 40) + c, h = hash2(id, 77); if (h < 0.4) continue;
+      var x = c * 40 - (off % 40) + h * 20, y = 14 + hash2(id, 5) * groundY * L[2];
+      b.fillStyle = L[1]; cloudPix(x, y, 6 + h * 8);
+    }
+  });
+
+  // terrain under the line of flight: sample the map ahead and behind
+  var far = [], near = [];
+  for (var x = 0; x < BW; x++) {
+    var dNM = (x - playerX) / pxPerNM, pos = move(P.lat, P.lon, P.hdg, dNM);
+    near.push(cellAt(pos[0], pos[1]));
+    var pf = move(P.lat, P.lon, P.hdg, dNM * 2.5 + 40); far.push(cellAt(pf[0], pf[1]));
+  }
+  // far ridge (hazy)
+  for (var x2 = 0; x2 < BW; x2++) {
+    var t = far[x2], wx = scroll * pxPerNM * 0.25 + x2, h0 = ridgeH(t, wx * 0.6, 0.6);
+    var col = mixHaze(PAL[t][0], sky.bands[n - 1], 0.55);
+    b.fillStyle = col; b.fillRect(x2, groundY - h0 - 6, 1, h0 + 6);
+  }
+  // near terrain with detail
+  for (var x3 = 0; x3 < BW; x3++) {
+    var t3 = near[x3], wx3 = Math.floor(scroll * pxPerNM + x3), h3 = ridgeH(t3, wx3, 1), top = groundY - h3;
+    var p = PAL[t3];
+    if (t3 === T.RED) { // mesas with strata
+      for (var yy3 = top; yy3 < BH; yy3++) { var band = Math.floor((yy3 - top + hash2(wx3 >> 3, 9) * 3) / 3) % 3; b.fillStyle = p[band]; b.fillRect(x3, yy3, 1, 1); }
+      b.fillStyle = "#efe0c4"; b.fillRect(x3, top, 1, 1);
+    } else if (t3 === T.MTN || t3 === T.SNOW) {
+      b.fillStyle = p[0]; b.fillRect(x3, top, 1, BH - top);
+      if (h3 > 34) { b.fillStyle = "#eef2f8"; b.fillRect(x3, top, 1, Math.min(8, h3 - 34)); }
+      if (hash2(wx3, 3) > 0.7) { b.fillStyle = p[2]; b.fillRect(x3, top + 3, 1, h3 / 2); }
+    } else if (t3 === T.OCEAN || t3 === T.LAKE) {
+      b.fillStyle = p[0]; b.fillRect(x3, groundY, 1, BH - groundY);
+      b.fillStyle = p[2]; if (((wx3 + Math.floor(now / 200)) % 9) < 2) b.fillRect(x3, groundY, 1, 1);
+      if (hash2(wx3, Math.floor(now / 500)) > 0.97) { b.fillStyle = "#ffffff"; b.fillRect(x3, groundY + 3 + Math.floor(hash2(wx3, 2) * 20), 1, 1); }
+    } else if (t3 === T.CITY) {
+      var bw = 4 + Math.floor(hash2(wx3 >> 3, 4) * 3), bh = 8 + Math.floor(hash2(wx3 >> 3, 6) * 26);
+      b.fillStyle = "#4a4e66"; b.fillRect(x3, groundY - bh, 1, bh);
+      if ((wx3 % bw) === 0) { b.fillStyle = "#2c3048"; b.fillRect(x3, groundY - bh, 1, bh); }
+      if (((wx3 % 3) === 1) && sky.stars) { b.fillStyle = "#ffe08a"; for (var wy = groundY - bh + 3; wy < groundY - 2; wy += 4) if (hash2(wx3, wy) > 0.4) b.fillRect(x3, wy, 1, 1); }
+      b.fillStyle = p[2]; b.fillRect(x3, groundY, 1, BH - groundY);
+    } else {
+      b.fillStyle = p[0]; b.fillRect(x3, top, 1, BH - top);
+      if (t3 === T.FOREST || t3 === T.PNW || t3 === T.HILLS) { b.fillStyle = p[2]; if (hash2(wx3, 1) > 0.5) b.fillRect(x3, top, 1, 2); }
+      if (t3 === T.FARM) { b.fillStyle = p[(wx3 >> 4) % 3]; b.fillRect(x3, groundY + 4, 1, BH - groundY - 4); }
+      if (t3 === T.TAN && hash2(wx3, 4) > 0.93) { b.fillStyle = "#4f7a4a"; b.fillRect(x3, top - 2, 1, 2); }
+    }
+  }
+
+  // altitude scale: 0 to 46,000 ft between the ground and the top
+  var topY = 30, altY = function (a) { return groundY - 6 - (groundY - 6 - topY) * Math.min(1, a / 46000); };
+  b.fillStyle = "rgba(255,255,255,0.25)";
+  [10000, 20000, 30000, 40000].forEach(function (a) { var yy = Math.round(altY(a)); for (var x = 0; x < 10; x += 2) b.fillRect(x, yy, 1, 1); text(a / 1000 + "K", 3, yy - 9, "rgba(255,255,255,0.55)"); });
+
+  // real planes within 15 NM either side of your line of flight
+  var list = visible(now), shown = [];
+  list.forEach(function (p) {
+    var a = (90 - P.hdg) * DEG, ux = Math.cos(a), uy = Math.sin(a);
+    var along = p.r.dx * ux + p.r.dy * uy, across = -p.r.dx * uy + p.r.dy * ux;
+    if (Math.abs(across) > 15) return;
+    var x = playerX + along * pxPerNM; if (x < -20 || x > BW + 20) return;
+    var rel = ((p.trk - P.hdg) % 360 + 360) % 360, flip = rel > 90 && rel < 270;
+    var shape = shapeFor(p.kind, p.cat, p.type), sc = shape === "heavy" ? 0.9 : shape === "jet" ? 0.75 : 0.85;
+    var sp = sideSprite(shape, p.kind, p.call, sc * (1 - Math.abs(across) / 40), flip, 0, false);
+    var y = p.w.alt <= 0 ? groundY - sp.height / 2 : altY(p.w.alt);
+    b.globalAlpha = 1 - Math.abs(across) / 30;
+    b.drawImage(sp, Math.round(x - sp.width / 2), Math.round(y - sp.height / 2));
+    b.globalAlpha = 1;
+    shown.push(p);
+    if (shown.length <= 8) text(p.call, x, y - sp.height / 2 - 8, p.demo ? "#9aa0b8" : KIND_COL[p.kind], "center");
+  });
+
+  // you
+  var pitch = clamp(P.vs / 2500, -1, 1);
+  var me = sideSprite("jet", "AIRLINE", "", 1.5, false, pitch, true);
+  var myY = altY(P.alt);
+  var bob = Math.sin(now / 400) * 0.6;
+  b.drawImage(me, playerX - Math.round(me.width / 2), Math.round(myY - me.height / 2 + bob));
+  // engine contrail above 25,000 ft
+  if (P.alt > 25000) { b.fillStyle = "rgba(255,255,255,0.5)"; for (var tx = 1; tx < 40; tx += 2) b.fillRect(playerX - 18 - tx, Math.round(myY + 2 + bob), 1, 1); }
+  hud(now, list);
+}
+function cloudPix(x, y, r) { x = Math.round(x); y = Math.round(y); b.fillRect(x - r, y, r * 2, 3); b.fillRect(x - r + 2, y - 2, r * 2 - 4, 2); b.fillRect(x - r / 2, y - 4, r, 2); b.fillRect(x - r + 3, y + 3, r * 2 - 6, 1); }
+function ridgeH(t, wx, s) {
+  var n = fbm(wx * 0.02, 1.7);
+  if (t === T.OCEAN || t === T.LAKE) return 0;
+  if (t === T.MTN || t === T.SNOW) return Math.round((18 + n * 34 + vnoise(wx * 0.09, 4) * 8) * s);
+  if (t === T.RED) return Math.round((Math.floor(n * 5) * 7 + 4) * s);        // stepped mesas
+  if (t === T.HILLS || t === T.PNW) return Math.round((8 + n * 16) * s);
+  if (t === T.FOREST) return Math.round((5 + n * 8 + (hash2(wx >> 1, 3) > 0.6 ? 2 : 0)) * s);
+  if (t === T.TAN || t === T.CHAP) return Math.round((3 + n * 7) * s);
+  if (t === T.CITY) return 2;
+  return Math.round((2 + n * 4) * s);
+}
+function mixHaze(a, c, f) { var x = hexRgb(a), y = hexRgb(c); return "rgb(" + Math.round(x[0] + (y[0] - x[0]) * f) + "," + Math.round(x[1] + (y[1] - x[1]) * f) + "," + Math.round(x[2] + (y[2] - x[2]) * f) + ")"; }
+
+/* ================= HUD ================= */
+function hud(now, list) {
+  var tb = document.getElementById("top").getBoundingClientRect(), hy = tb.left / SCALE < 104 ? Math.ceil(tb.bottom / SCALE) + 3 : 4;
+  box(4, hy, 92, 42);
+  text("HDG " + String(Math.round(P.hdg)).padStart(3, "0") + " " + dirName(P.hdg), 8, hy + 3, "#ffe08a");
+  text("SPD " + Math.round(P.spd) + "KT", 8, hy + 12, "#ffffff");
+  text("ALT " + fmtAlt(P.alt), 8, hy + 21, "#ffffff");
+  var vs = Math.round(P.vs / 100) * 100;
+  text((vs > 0 ? "+" : "") + vs + " FPM", 8, hy + 30, vs > 0 ? "#9fd36a" : vs < 0 ? "#ff9a7a" : "#9aa0b8");
+  var ap = nearestAirport();
+  var place = ap[1] < 25 ? "OVER " + ap[2][1] : ap[0] + " " + Math.round(ap[1]) + "NM " + dirName(bearingTo(ap[2][2], ap[2][3]));
+  var real = list.filter(function (p) { return !p.demo; }).length;
+  var status = demoMode ? "DEMO TRAFFIC" : live ? real + " REAL PLANES" : "LOADING TRAFFIC";
+  var y2 = hy + 46, x2 = 4;
+  box(x2, y2, Math.max(92, b.measureText(place).width + 10), 24);
+  text(place, x2 + 4, y2 + 3, "#ffffff");
+  text(status, x2 + 4, y2 + 12, demoMode ? "#ff9a7a" : "#9fd36a");
+  if (warps[warpI] > 1) text("TIME X" + warps[warpI], x2 + 4, y2 + 26, "#ffb000");
+  var cnt = Object.keys(spotted).length;
+  text("LOG " + cnt, BW - 4, BH - 12 - deckH(), "#ffe08a", "right");
+  if (banner && now < banner.until) {
+    var w = Math.max(b.measureText(banner.text).width, b.measureText(banner.sub).width) + 14;
+    box(BW / 2 - w / 2, BH * 0.3, w, 24);
+    if (Math.floor(now / 250) % 2) text(banner.text, BW / 2, BH * 0.3 + 3, banner.col, "center"); else text(banner.text, BW / 2, BH * 0.3 + 3, "#ffffff", "center");
+    text(banner.sub, BW / 2, BH * 0.3 + 13, "#c8cde0", "center");
+  }
+}
+function bearingTo(la, lo) { var r = nmTo(la, lo); return (Math.atan2(r.dx, r.dy) / DEG + 360) % 360; }
+function deckH() { return Math.round(document.getElementById("deck").offsetHeight / SCALE); }
+
+/* ================= loop ================= */
+function frame(now) {
+  step(now);
+  if (CELL) { if (view === "map") drawMap(Date.now()); else drawSide(Date.now()); }
+  ctx.imageSmoothingEnabled = false;
+  ctx.drawImage(buf, 0, 0, BW * SCALE * (cv.width / innerWidth), BH * SCALE * (cv.height / innerHeight));
+  if (Date.now() - lastFetch > 60000 || (Math.round(P.lat) + "," + Math.round(P.lon)) !== tileKey && Date.now() - lastFetch > 8000) { fetchTraffic(); prune(); }
+  requestAnimationFrame(frame);
+}
+setInterval(function () { try { localStorage.setItem("standby.fly", JSON.stringify({ lat: P.lat, lon: P.lon, alt: P.alt, hdg: P.hdg })); } catch (e) {} }, 5000);
+
+/* ================= controls ================= */
+function bindHold(el) {
+  var k = el.getAttribute("data-hold");
+  var on = function (e) { e.preventDefault(); hold[k] = true; el.classList.add("on"); };
+  var off = function () { hold[k] = false; el.classList.remove("on"); };
+  el.addEventListener("pointerdown", on); el.addEventListener("pointerup", off); el.addEventListener("pointerleave", off); el.addEventListener("pointercancel", off);
+}
+document.querySelectorAll("[data-hold]").forEach(bindHold);
+var KEYS = { ArrowLeft: "left", a: "left", ArrowRight: "right", d: "right", ArrowUp: "up", w: "up", ArrowDown: "down", s: "down", e: "faster", q: "slower" };
+addEventListener("keydown", function (e) {
+  if (KEYS[e.key]) { hold[KEYS[e.key]] = true; e.preventDefault(); }
+  if (e.key === "v") toggleView(); if (e.key === "z") cycleZoom(); if (e.key === "t") cycleWarp();
+});
+addEventListener("keyup", function (e) { if (KEYS[e.key]) hold[KEYS[e.key]] = false; });
+var $ = function (id) { return document.getElementById(id); };
+function toggleView() { view = view === "map" ? "side" : "map"; $("bView").textContent = view === "map" ? "SIDE" : "MAP"; $("bZoom").hidden = view !== "map"; }
+function cycleZoom() { zoomI = (zoomI + 1) % zooms.length; }
+function cycleWarp() { warpI = (warpI + 1) % warps.length; $("bWarp").textContent = "X" + warps[warpI]; }
+$("bView").addEventListener("click", toggleView);
+$("bZoom").addEventListener("click", cycleZoom);
+$("bWarp").addEventListener("click", cycleWarp);
+$("bAuto").addEventListener("click", function () { P.vs = 0; hold.up = hold.down = false; });
+$("bExit").addEventListener("click", function () { location.href = "./"; });
+$("bLog").addEventListener("click", function () {
+  var keys = Object.keys(spotted).sort(function (a, c) { return spotted[c].when - spotted[a].when; });
+  var tally = {}; keys.forEach(function (k) { tally[spotted[k].kind] = (tally[spotted[k].kind] || 0) + 1; });
+  $("tally").innerHTML = ""; Object.keys(KIND_COL).forEach(function (k) { var i = document.createElement("i"); i.style.color = KIND_COL[k]; i.textContent = k + " " + (tally[k] || 0); $("tally").appendChild(i); });
+  $("entries").innerHTML = keys.length ? "" : '<p>Nothing logged yet. Find a real plane and fly alongside it.</p>';
+  keys.slice(0, 200).forEach(function (k) {
+    var s = spotted[k], row = document.createElement("div"); row.className = "entry";
+    var l = document.createElement("b"); l.textContent = s.call; l.style.color = KIND_COL[s.kind] || "#fff";
+    var r = document.createElement("span"); r.textContent = (s.type || "?") + " " + s.kind + " near " + s.near + " " + new Date(s.when).toLocaleDateString();
+    row.appendChild(l); row.appendChild(r); $("entries").appendChild(row);
+  });
+  $("logSheet").hidden = false;
+});
+$("bLogClose").addEventListener("click", function () { $("logSheet").hidden = true; });
+$("bJump").addEventListener("click", function () {
+  var box2 = $("jumps"); box2.innerHTML = "";
+  var home = document.createElement("button"); home.textContent = "Home: " + cfg.name; home.addEventListener("click", function () { jump(cfg.lat, cfg.lon); }); box2.appendChild(home);
+  AIRPORTS.forEach(function (a) { var bt = document.createElement("button"); bt.textContent = a[0] + "  " + a[4]; bt.addEventListener("click", function () { jump(a[2], a[3]); }); box2.appendChild(bt); });
+  $("jumpSheet").hidden = false;
+});
+$("bJumpClose").addEventListener("click", function () { $("jumpSheet").hidden = true; });
+function jump(la, lo) {
+  P.lat = la; P.lon = lo; P.alt = Math.max(P.alt, 6000); $("jumpSheet").hidden = true;
+  if (demoMode) { endDemo(); demoMode = false; startDemo(); }
+  lastFetch = 0;
+}
+
+/* ================= boot ================= */
+resize(); addEventListener("resize", resize);
+toggleView(); toggleView();
+var fontsReady = document.fonts && document.fonts.load ? document.fonts.load("8px Silkscreen").catch(function () {}) : Promise.resolve();
+Promise.all([
+  fetch("https://cdn.jsdelivr.net/npm/world-atlas@2.0.2/land-50m.json").then(function (r) { return r.json(); }),
+  fetch("https://cdn.jsdelivr.net/npm/us-atlas@3.0.1/states-10m.json").then(function (r) { return r.json(); }),
+  fontsReady
+]).then(function (res) {
+  var t0 = performance.now();
+  buildWorld(topojson.feature(res[0], res[0].objects.land), topojson.feature(res[1], res[1].objects.states));
+  window.__buildMs = Math.round(performance.now() - t0);
+  $("loading").hidden = true;
+}).catch(function (e) {
+  $("loading").textContent = "THE MAP DID NOT LOAD. CHECK THE CONNECTION AND RELOAD.";
+});
+fetchTraffic();
+requestAnimationFrame(frame);
+})();
+</script>
+</body>
+</html>

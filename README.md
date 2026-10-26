@@ -12,6 +12,7 @@ No framework, no build step, no dependencies.
 ```
 public/index.html          The whole app: HTML, CSS and JS in one file
 public/check.html          One-tap test of which sources a device can reach directly
+public/fly.html            Fly mode: 16-bit flight game over a pixel-art US with the real planes around you
 functions/_lib/relay.js    Shared server code: aircraft relay and route lookup (_lib is not routed)
 functions/api/planes.js    GET /api/planes?lat=&lon=&r=        nearby aircraft
 functions/api/route.js     GET /api/route?callsign=&lat=&lon=  origin and destination
@@ -21,6 +22,12 @@ docs/HANDOFF.md            Original design handoff: skins, data flow, provider n
 ```
 
 The page polls `/api/planes` every 8 seconds. The relay asks adsb.lol, adsb.fi, airplanes.live and OpenSky at once and merges them by aircraft ID so no plane shows twice. From Cloudflare only adsb.lol answers today; an optional home relay (docs/HOME_RELAY.md) runs the same code from a home connection, where the other sources work. Emails asking the networks for access are in docs/SOURCE_ACCESS.md. Routes come from adsbdb, with the adsb.lol routeset as backup, cached 6 hours. If no source answers for a minute the page shows clearly labeled DEMO TRAFFIC and keeps retrying.
+
+## Fly mode
+
+The Fly button opens `/fly`, a 16-bit flight game. You fly your own plane over a pixel-art map of the lower 48 (coastlines and state lines from the free world-atlas and us-atlas files on jsDelivr; terrain colors are painted by region). Map view is top-down; side view is a side-scroller whose ground is read from the real map along your heading. Real planes from `/api/planes` fly around you, sorted into airline, cargo, military, government, bizjet, private and helicopter. Fly within about 3 miles and 3,000 feet of one to log it. Demo traffic fills in when no source answers and is never logged. The logbook and your last position are saved in this browser only.
+
+Controls: arrows turn and climb, THR+ and THR- set speed, LVL levels off, ZOOM steps from the whole US down to close in, X1 speeds up your plane only, GO jumps to an airport. Keyboard: arrow keys or WASD, Q and E for throttle, V view, Z zoom, T time.
 
 ## Run locally
 

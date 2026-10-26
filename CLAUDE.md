@@ -16,10 +16,11 @@ A retro flight-board display of planes overhead, for an old tablet. Personal pro
 - Each source keeps a last good copy for a few minutes, with `seen_pos` aged so the page dead-reckons it forward.
 - adsbdb route shape verified live. adsb.lol routeset could not be reached from the sandbox, so its shape is still unverified.
 - The page avoids optional chaining and `??` so it runs on old tablet browsers. Keep it that way.
+- Fly mode (`public/fly.html`): 16-bit game in its own file so the display stays small. Same drawn-in-code pixel art approach as redrockpals.pages.dev (low-res buffer, shapes snapped to whole pixels, Silkscreen). Short side of the screen is 200 game pixels. Map raster is 0.04 degree cells built in the browser from world-atlas land-50m and us-atlas states-10m; Great Lakes and a few other lakes are hand-placed ovals because the state shapes stop at the shoreline. Region terrain is a hand-written rule set (`terrainUS`), not real elevation. Traffic is fetched per 1 degree square with r=100 so the relay cache stays shared. Never log demo planes. The reference images Zack sent were stock art: style reference only, nothing copied.
 - Geocoding is OpenStreetMap Nominatim straight from the browser; fine at personal volume.
 
 ## Current step
-Live on standby-flights.pages.dev, deployed from `main`. Custom domain standby.flights added, waiting for the new domain to publish. Source access: emails drafted in docs/SOURCE_ACCESS.md, home relay built but not set up. Next: work through the screens one by one.
+Live on standby-flights.pages.dev, deployed from `main`. Custom domain standby.flights added, waiting for the new domain to publish. Source access: emails drafted in docs/SOURCE_ACCESS.md, home relay built but not set up. Fly mode built on the preview branch for Zack to try. Next: his feedback on Fly, then the screens one by one.
 
 ## Commands
 - Run locally: `npx wrangler pages dev` then open http://localhost:8788
